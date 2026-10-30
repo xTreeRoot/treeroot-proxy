@@ -105,7 +105,9 @@ def install(args):
             Path('/usr/local/bin/caddy').write_bytes(stream.extractfile('caddy').read())
         Path('/usr/local/bin/caddy').chmod(0o755)
         for name in FILES:
-            # Backups predating the chart bundle still restore their original UI.
+            # Backups predating additive features retain their original application.
+            if name in ('egress.py', 'egress.js', 'egress.css', 'connector.py', 'egress_proxy.py') and not (root / 'app' / name).exists() and 'egress.js' not in (root / 'app/index.html').read_text():
+                continue
             if name == 'echarts.min.js' and not (root / 'app' / name).exists() and 'echarts.min.js' not in (root / 'app/index.html').read_text():
                 continue
             shutil.copyfile(root / 'app' / name, APP / name)

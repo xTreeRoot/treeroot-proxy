@@ -20,6 +20,7 @@ import uuid
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
+from egress import install_routes as install_egress_routes
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = json.loads(Path(os.environ.get('TREEROOT_CONFIG', '/etc/treeroot/config.json')).read_text())
@@ -129,6 +130,7 @@ def initialize():
             db.execute('INSERT INTO users(name,client_uuid,email,token,created) VALUES(?,?,?,?,?)',
                        ('我的设备', CONFIG['initial_uuid'], 'owner@treeroot.local', CONFIG['initial_token'], int(time.time())))
     os.chmod(DB, 0o600)
+    egress_manager.initialize(DATA)
 
 
 def xray_api(command, *args):
@@ -392,6 +394,9 @@ def authenticated(request: Request):
     if request.method not in ('GET', 'HEAD') and not hmac.compare_digest(request.headers.get('x-csrf-token', ''), session['csrf']):
         raise HTTPException(403, '会话校验失败，请刷新后重试')
     return dict(session)
+
+
+egress_manager = install_egress_routes(app, database, authenticated, CONFIG, DATA, ROOT)
 
 
 class Login(BaseModel):
@@ -667,6 +672,6 @@ def index():
 
 @app.get('/assets/{name}')
 def asset(name: str):
-    if name not in ('app.js', 'style.css', 'echarts.min.js'):
+    if name not in ('app.js', 'style.css', 'echarts.min.js', 'egress.js', 'egress.css'):
         raise HTTPException(404)
     return FileResponse(ROOT / name)

@@ -1,7 +1,7 @@
 'use strict';
 const $ = s => document.querySelector(s);
 const state = {csrf:'',users:[],page:'overview',filter:'',userFilter:'',activityFilter:'',activitySearch:'',usersLoadedAt:0,lastFullRefresh:0,edit:null,refreshing:false,pagination:{users:{page:1,size:6},usage:{page:1,size:6},activity:{page:1,size:25,anchor:null}},activityRequest:0};
-const titles = {overview:'运行概览',users:'用户与订阅',activity:'访问记录',settings:'管理设置'};
+const titles = {overview:'运行概览',users:'用户与订阅',activity:'访问记录',egress:'电脑出口',settings:'管理设置'};
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function bytes(value){value=Number(value)||0;if(value<1024)return Math.round(value)+' B';const n=Math.min(Math.floor(Math.log(value)/Math.log(1024)),4);return (value/1024**n).toFixed(n>1?2:1)+' '+['B','KB','MB','GB','TB'][n];}
 function date(value){return value?new Date(value*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}):'—';}
@@ -115,6 +115,7 @@ async function refresh(){
   state.refreshing=true;
   const pageAtStart=state.page,filterAtStart=state.filter;
   try{
+    if(pageAtStart==='egress'){await refreshEgress();state.lastFullRefresh=Date.now();return;}
     if(pageAtStart==='settings'){await refreshRates();return;}
     if(pageAtStart==='overview'){
       refreshResources();

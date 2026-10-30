@@ -18,7 +18,8 @@ APP = Path('/opt/treeroot')
 DATA = Path('/var/lib/treeroot')
 ARCHIVES = Path('/var/backups/treeroot')
 FILES = ('app.py', 'app.js', 'index.html', 'style.css', 'echarts.min.js', 'backup.py',
-         'subscription-template.json', 'requirements.txt', 'requirements.lock')
+         'subscription-template.json', 'requirements.txt', 'requirements.lock',
+         'egress.py', 'egress.js', 'egress.css', 'connector.py', 'egress_proxy.py')
 UNITS = ('xray.service', 'caddy.service', 'treeroot-panel.service',
          'treeroot-backup.service', 'treeroot-backup.timer')
 
@@ -91,6 +92,10 @@ def create_backup(public_ip, stop_services):
             for unit in UNITS:
                 copy_file('/etc/systemd/system/' + unit, root / 'services' / unit)
             copy_file('/etc/logrotate.d/treeroot', root / 'logrotate/treeroot')
+            copy_file('/etc/ssh/sshd_config.d/40-treeroot-egress.conf', root / 'egress/sshd.conf')
+            copy_file('/etc/systemd/system/treeroot-panel.service.d/egress.conf', root / 'egress/panel-service.conf')
+            copy_file('/usr/local/libexec/treeroot-egress-authorize', root / 'egress/authorize.py')
+            copy_file('/var/lib/treeroot-egress/registry.json', root / 'egress/registry.json')
         for name in FILES:
             copy_file(APP / name, root / 'app' / name)
         if not (root / 'app/requirements.lock').exists():
@@ -120,8 +125,10 @@ def health():
     if response.status != 200:
         raise RuntimeError('Panel health check failed')
     resources = [('style.css', 'text/css'), ('app.js', 'javascript')]
-    if 'echarts.min.js' in (APP / 'index.html').read_text():
-        resources.append(('echarts.min.js', 'javascript'))
+    html = (APP / 'index.html').read_text()
+    for name, mime in [('echarts.min.js', 'javascript'), ('egress.js', 'javascript'), ('egress.css', 'text/css')]:
+        if name in html:
+            resources.append((name, mime))
     for name, content_type in resources:
         response = urllib.request.urlopen('http://127.0.0.1:19991/assets/' + name, timeout=3)
         if response.status != 200 or content_type not in response.headers.get('Content-Type', ''):
@@ -134,7 +141,7 @@ def update(archive, public_ip):
         safe_extract(archive, staging, allow=FILES)
         if {p.name for p in staging.iterdir()} != set(FILES):
             raise RuntimeError('Incomplete application package')
-        for name in ('app.py', 'backup.py'):
+        for name in (name for name in FILES if name.endswith('.py')):
             compile((staging / name).read_text(), name, 'exec')
         requirements = (staging / 'requirements.lock').read_text().splitlines()
         code = 'import importlib.metadata,json;print(json.dumps({v:importlib.metadata.version(v) for v in ' + repr([line.split('==')[0] for line in requirements if '==' in line]) + '}))'

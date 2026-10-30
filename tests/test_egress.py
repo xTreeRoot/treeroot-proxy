@@ -1,0 +1,105 @@
+"""验证电脑出口的管理员边界、一次性配对、凭据隔离及停用行为。"""
+import base64
+import io
+import json
+import time
+import unittest
+import zipfile
+from unittest.mock import patch
+from fastapi.testclient import TestClient
+import test_app
+
+
+class EgressTests(unittest.TestCase):
+    setUpClass = classmethod(test_app.PanelTests.setUpClass.__func__)
+    tearDownClass = classmethod(test_app.PanelTests.tearDownClass.__func__)
+    setUp = test_app.PanelTests.setUp
+
+    def create(self):
+        return self.client.post('/api/egress', headers=self.headers, json={
+            'name': 'My Mac', 'browser': {'platform': 'MacIntel', 'platformName': 'macOS',
+                                        'platformVersion': '26.3.1', 'architecture': 'arm', 'bitness': '64'}}).json()
+
+    def pair(self, device):
+        self.panel.CONFIG.update(egress_ssh_host='192.0.2.1', egress_known_hosts='192.0.2.1 ssh-ed25519 test')
+        response = self.client.post('/api/egress/' + device['id'] + '/setup', headers=self.headers, json={})
+        self.assertEqual(response.status_code, 200)
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            setup = json.loads(archive.read('setup.json'))
+            self.assertEqual(set(archive.namelist()), {'setup.json', 'connector.py', 'egress_proxy.py', '使用说明.txt', '连接.command', '连接.cmd'})
+        blob = b'\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20' + b'a' * 32
+        body = {'token': setup['token'], 'public_key': 'ssh-ed25519 ' + base64.b64encode(blob).decode()}
+        paired = self.client.post('/api/egress/' + device['id'] + '/pair', json=body)
+        self.assertEqual(paired.status_code, 200)
+        return body, paired.json()
+
+    def test_admin_csrf_and_secret_isolation(self):
+        anonymous = TestClient(self.panel.app, base_url='https://testserver')
+        self.addCleanup(anonymous.close)
+        self.assertEqual(anonymous.get('/api/egress').status_code, 401)
+        self.assertEqual(self.client.post('/api/egress', json={'name': 'Denied'}).status_code, 403)
+        first, second = self.create(), self.create()
+        self.assertNotEqual(first['id'], second['id'])
+        for secret in ('access_code', 'proxy_password', 'agent_hash', 'pair_hash', 'public_key', 'port'):
+            self.assertNotIn(secret, first)
+        with self.panel.database(readonly=True) as db:
+            before = tuple(db.execute('SELECT client_uuid,token,upload,download FROM users WHERE id=1').fetchone())
+        self.panel.initialize()
+        self.assertEqual(len(self.client.get('/api/egress').json()), 2)
+        with self.panel.database(readonly=True) as db:
+            self.assertEqual(tuple(db.execute('SELECT client_uuid,token,upload,download FROM users WHERE id=1').fetchone()), before)
+
+    def test_pairing_single_use_heartbeat_and_disable(self):
+        device = self.create()
+        body, paired = self.pair(device)
+        path = '/api/egress/' + device['id']
+        self.assertEqual(self.client.post(path + '/pair', json=body).status_code, 403)
+        self.assertEqual(self.client.post(path + '/heartbeat', json={}).status_code, 403)
+        headers = {'Authorization': 'Bearer ' + paired['agent_token']}
+        self.assertEqual(self.client.post(path + '/heartbeat', headers=headers, json={}).status_code, 200)
+        self.assertTrue(self.client.get('/api/egress').json()[0]['online'])
+        registry = json.loads((self.panel.egress_manager.directory / 'registry.json').read_text())
+        self.assertEqual(registry['devices'][0]['proxy']['password'], paired['proxy_password'])
+        self.assertEqual(registry['devices'][0]['port'], paired['remote_port'])
+        self.client.patch(path, headers=self.headers, json={'enabled': False})
+        self.assertEqual(self.client.post(path + '/heartbeat', headers=headers, json={}).status_code, 403)
+        self.assertFalse(self.client.get('/api/egress').json()[0]['online'])
+        self.assertFalse(json.loads((self.panel.egress_manager.directory / 'registry.json').read_text())['devices'][0]['enabled'])
+
+    def test_expiry_and_bad_keys_are_rejected(self):
+        device = self.create()
+        body, _ = self.pair(device)
+        with self.panel.database() as db:
+            db.execute('UPDATE egress_devices SET pair_hash=?,pair_expires=? WHERE id=?',
+                       (self.panel.egress_manager.config.get('missing', 'expired'), int(time.time()) - 1, device['id']))
+        self.assertEqual(self.client.post('/api/egress/' + device['id'] + '/pair', json=body).status_code, 403)
+        body['public_key'] = 'ssh-ed25519 ' + 'a' * 64
+        self.assertEqual(self.client.post('/api/egress/' + device['id'] + '/pair', json=body).status_code, 422)
+
+    def test_ip_check_requires_connected_device_and_does_not_report_server_ip(self):
+        device = self.create()
+        path = '/api/egress/' + device['id']
+        self.assertEqual(self.client.post(path + '/test', headers=self.headers, json={}).status_code, 409)
+        _, paired = self.pair(device)
+        self.client.post(path + '/heartbeat', headers={'Authorization': 'Bearer ' + paired['agent_token']}, json={})
+        with patch('egress.subprocess.run') as execute:
+            execute.return_value.stdout = '203.0.113.10'
+            response = self.client.post(path + '/test', headers=self.headers, json={})
+            self.assertEqual(response.json()['ip'], '203.0.113.10')
+            self.assertEqual(execute.call_args.args[0], ['/usr/bin/curl', '--config', '-'])
+            self.assertIn('proxy-user', execute.call_args.kwargs['input'])
+
+    def test_delete_revokes_access_and_restore_requires_pairing(self):
+        device = self.create()
+        _, paired = self.pair(device)
+        path = '/api/egress/' + device['id']
+        headers = {'Authorization': 'Bearer ' + paired['agent_token']}
+        self.assertEqual(self.client.request('DELETE', path, headers=self.headers, json={}).status_code, 200)
+        self.assertEqual(self.client.get('/api/egress').json(), [])
+        self.assertEqual(len(self.client.get('/api/egress?deleted=true').json()), 1)
+        self.assertEqual(self.client.post(path + '/heartbeat', headers=headers, json={}).status_code, 404)
+        self.assertEqual(json.loads((self.panel.egress_manager.directory / 'registry.json').read_text())['devices'], [])
+        self.assertEqual(self.client.post(path + '/restore', headers=self.headers, json={}).status_code, 200)
+        restored = self.client.get('/api/egress').json()[0]
+        self.assertFalse(restored['enabled'])
+        self.assertFalse(restored['paired'])
