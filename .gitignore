@@ -1,0 +1,9 @@
+private/
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.playwright-cli/
+.DS_Store
+work/
+.idea/

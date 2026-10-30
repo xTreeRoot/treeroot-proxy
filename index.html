@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark"><title>TreeRoot · 代理管理</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23111a29'/%3E%3Ctext x='11' y='45' font-family='sans-serif' font-size='40' font-weight='bold' fill='%235addc0'%3Etr%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/assets/style.css?v=20261030-2">
+  <script defer src="/assets/echarts.min.js?v=5.6.0"></script><script defer src="/assets/app.js?v=20261030-2"></script>
+</head>
+<body>
+<div id="login" class="login-screen">
+  <form id="login-form" class="login-card" aria-label="登录 TreeRoot">
+    <div class="brand-mark">tr<span>.</span></div>
+    <label for="username">管理员账号</label><input id="username" autocomplete="username" required value="admin">
+    <label for="password">密码</label><input id="password" type="password" autocomplete="current-password" required>
+    <p id="login-error" class="error" role="alert"></p><button class="button primary full" type="submit">登录 <span>→</span></button>
+  </form>
+</div>
+<div id="app" class="app hidden">
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="TreeRoot 首页"><span class="brand-mark">tr<span>.</span></span><div>TreeRoot</div></a>
+    <nav aria-label="主导航">
+      <button class="nav-item active" data-page="overview"><span class="nav-icon">◫</span>运行概览</button>
+      <button class="nav-item" data-page="users"><span class="nav-icon">♧</span>用户与订阅</button>
+      <button class="nav-item" data-page="activity"><span class="nav-icon">≋</span>访问记录</button>
+      <button class="nav-item" data-page="settings"><span class="nav-icon">⚙</span>管理设置</button>
+    </nav>
+    <div class="sidebar-info">
+      <div id="health" class="server-card collector-card" role="status"><span class="server-orbit">≋</span><div>采集状态<small id="health-text">连接中</small></div><span class="dot"></span></div>
+      <div class="server-card"><span class="server-orbit">◎</span><div>美国 · 圣何塞<small>186.244.200.45</small></div><span class="dot"></span></div>
+    </div>
+    <div class="sidebar-foot"><div class="avatar">A</div><div><b id="account-name">admin</b><small>管理员</small></div><button id="logout" class="icon-button" aria-label="退出登录">↗</button></div>
+  </aside>
+  <main>
+    <div class="content">
+      <div class="page-heading"><h1 id="page-title">运行概览</h1><div class="heading-actions"><select id="user-filter" aria-label="按用户筛选"><option value="">全部用户</option></select><button id="refresh" class="button subtle">↻ 刷新</button></div></div>
+      <section id="page-overview" class="page">
+        <div class="overview-scroll scroll-region">
+          <div class="metric-grid">
+            <article class="metric"><div class="metric-label">累计代理流量<span>↗</span></div><div class="metric-value" id="total-traffic">—</div><div class="metric-note" id="total-breakdown">—</div></article>
+            <article class="metric"><div class="metric-label">最近 24 小时<span>◷</span></div><div class="metric-value" id="day-traffic">—</div></article>
+            <article class="metric"><div class="metric-label">启用用户<span>◎</span></div><div class="metric-value" id="active-users">—</div></article>
+            <article class="metric"><div class="metric-label">24 小时连接数<span>⇄</span></div><div class="metric-value" id="connections">—</div></article>
+            <article class="metric"><div class="metric-label">实时上传<span>↑</span></div><div class="metric-value" id="speed-upload">—</div></article>
+            <article class="metric"><div class="metric-label">实时下载<span>↓</span></div><div class="metric-value" id="speed-download">—</div></article>
+          </div>
+          <div class="chart-grid">
+            <article class="panel"><div class="panel-heading"><h2>流量趋势</h2><span class="tag">24 小时</span></div><div id="traffic-chart" class="traffic-chart" role="img" aria-label="最近24小时上传和下载流量"></div></article>
+            <article class="panel"><div class="panel-heading"><h2>常用访问域名</h2><span class="tag">TOP 12</span></div><div id="domain-list" class="domain-list"></div></article>
+          </div>
+          <article class="panel usage-panel"><div class="panel-heading"><h2>用户使用情况</h2><button class="text-button" data-page="users">管理用户 →</button></div><div id="usage-cards" class="usage-cards"></div><nav id="usage-pagination" class="pagination" aria-label="用户使用情况分页"></nav></article>
+        </div>
+      </section>
+      <section id="page-users" class="page hidden">
+        <article class="panel list-panel"><div class="panel-heading"><h2>用户</h2><button class="button primary" id="add-user">＋ 新增用户</button></div><div class="scroll-region"><div id="user-cards" class="user-cards"></div></div><nav id="users-pagination" class="pagination" aria-label="用户与订阅分页"></nav></article>
+      </section>
+      <section id="page-activity" class="page hidden">
+        <article class="panel list-panel"><div class="panel-heading activity-heading"><h2>代理连接</h2><input id="domain-search" type="search" placeholder="搜索域名或 IP" aria-label="搜索访问域名"></div><div id="activity-table" class="table-wrap scroll-region" tabindex="0" aria-label="访问记录表格"></div><nav id="activity-pagination" class="pagination" aria-label="访问记录分页"></nav></article>
+      </section>
+      <section id="page-settings" class="page hidden"><div class="scroll-region"><article class="panel password-panel"><div class="panel-heading"><h2>修改管理员密码</h2></div><form id="password-form" class="settings-form"><label for="old-password">原密码</label><input id="old-password" type="password" autocomplete="current-password" required><label for="new-password">新密码</label><input id="new-password" type="password" autocomplete="new-password" required><button class="button primary" type="submit">更新密码</button></form></article></div></section>
+    </div>
+  </main>
+</div>
+<dialog id="user-dialog"><form id="user-form"><div class="modal-heading"><h2 id="user-modal-title">新增用户</h2><button class="icon-button close-dialog" type="button" aria-label="关闭">×</button></div><label for="user-name">用户名称</label><input id="user-name" maxlength="64" required placeholder="用户名称"><div class="modal-actions"><button type="button" class="button subtle close-dialog">取消</button><button type="submit" class="button primary">保存用户</button></div></form></dialog>
+<dialog id="subscription-dialog"><div class="modal-heading"><h2 id="subscription-title">订阅链接</h2><button class="icon-button close-dialog" aria-label="关闭">×</button></div><label for="clash-link">Clash</label><textarea id="clash-link" readonly rows="3"></textarea><button id="copy-clash" class="button subtle full">复制 Clash 订阅</button><label for="rocket-link">Shadowrocket · 小火箭</label><textarea id="rocket-link" readonly rows="3"></textarea><button id="copy-rocket" class="button subtle full">复制小火箭订阅</button></dialog>
+<dialog id="confirm-dialog"><div class="modal-heading"><h2 id="confirm-title">重置订阅</h2><button class="icon-button close-dialog" aria-label="关闭">×</button></div><p id="confirm-description" class="muted"></p><div class="modal-actions"><button class="button subtle close-dialog">取消</button><button id="confirm-action" class="button danger">确认重置</button></div></dialog>
+<div id="toast" role="status" aria-live="polite"></div>
+</body></html>
