@@ -2,6 +2,7 @@
 """电脑端出口连接器：本机保存私钥，通过受限 SSH 反向隧道提供平台网络出口。"""
 import argparse
 import asyncio
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -9,8 +10,10 @@ import plistlib
 import re
 import shutil
 import ssl
+import sqlite3
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -18,6 +21,34 @@ from egress_proxy import ForwardProxy
 
 HOME = Path.home() / '.treeroot-connector'
 HTTPS_CONTEXT = None
+
+
+class RecordQueue:
+    """磁盘队列在断网或重启后继续上报；服务器按 event_key 去重。"""
+    def __init__(self, path):
+        self.path = path
+        with closing(sqlite3.connect(path)) as db, db:
+            db.execute('PRAGMA journal_mode=WAL')
+            db.execute('CREATE TABLE IF NOT EXISTS records(id INTEGER PRIMARY KEY,event_key TEXT UNIQUE,ts INTEGER,payload TEXT)')
+        path.chmod(0o600)
+
+    def append(self, record):
+        try:
+            with closing(sqlite3.connect(self.path)) as db, db:
+                db.execute('INSERT OR IGNORE INTO records(event_key,ts,payload) VALUES(?,?,?)',
+                           (record['event_key'], record['ts'], json.dumps(record)))
+                db.execute('DELETE FROM records WHERE ts<? OR id<=(SELECT MAX(id)-10000 FROM records)',
+                           (int(time.time()) - 7 * 86400,))
+        except sqlite3.Error:
+            print('访问记录暂时无法写入本机队列。', flush=True)
+
+    def batch(self):
+        with closing(sqlite3.connect(self.path)) as db, db:
+            return [json.loads(row[0]) for row in db.execute('SELECT payload FROM records ORDER BY id LIMIT 100')]
+
+    def acknowledge(self, keys):
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.executemany('DELETE FROM records WHERE event_key=?', [(key,) for key in keys])
 
 
 def save_private(path, value):
@@ -100,7 +131,8 @@ def install(setup_path):
 async def run(device_id):
     folder = folder_for(device_id)
     config = json.loads((folder / 'config.json').read_text())
-    proxy = ForwardProxy(config['proxy_username'], config['proxy_password'])
+    queue = RecordQueue(folder / 'records.sqlite3')
+    proxy = ForwardProxy(config['proxy_username'], config['proxy_password'], on_record=queue.append)
     server = await proxy.listen()
     port = server.sockets[0].getsockname()[1]
     arguments = [
@@ -117,16 +149,19 @@ async def run(device_id):
                                                             stderr=asyncio.subprocess.DEVNULL)
             try:
                 while process.returncode is None:
+                    records = []
                     try:
-                        await asyncio.to_thread(api, config, '/heartbeat', {}, config['agent_token'])
+                        records = await asyncio.to_thread(queue.batch)
+                        result = await asyncio.to_thread(api, config, '/heartbeat', {'records': records}, config['agent_token'])
+                        await asyncio.to_thread(queue.acknowledge, result.get('accepted', []))
                     except urllib.error.HTTPError as error:
                         if error.code in (403, 404):
                             print('出口已停用，等待管理员重新启用。', flush=True)
                             break
-                    except (OSError, ValueError):
+                    except (OSError, ValueError, sqlite3.Error):
                         pass
                     try:
-                        await asyncio.wait_for(process.wait(), 20)
+                        await asyncio.wait_for(process.wait(), 5 if records else 20)
                     except asyncio.TimeoutError:
                         continue
             finally:

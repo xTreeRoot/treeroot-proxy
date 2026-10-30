@@ -343,6 +343,10 @@ def collector():
             with RATE_LOCK:
                 STATUS['last_error'] = type(exc).__name__
             logger.exception('Collector failed')
+        try:
+            egress_manager.maintain()
+        except Exception:
+            logger.exception('Egress record maintenance failed')
         STOP.wait(5)
 
 
@@ -396,7 +400,7 @@ def authenticated(request: Request):
     return dict(session)
 
 
-egress_manager = install_egress_routes(app, database, authenticated, CONFIG, DATA, ROOT)
+egress_manager = install_egress_routes(app, database, authenticated, CONFIG, DATA, ROOT, report_database)
 
 
 class Login(BaseModel):

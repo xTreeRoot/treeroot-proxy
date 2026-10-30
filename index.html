@@ -4,9 +4,9 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark"><title>TreeRoot · 代理管理</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23111a29'/%3E%3Ctext x='11' y='45' font-family='sans-serif' font-size='40' font-weight='bold' fill='%235addc0'%3Etr%3C/text%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/assets/style.css?v=20261030-7">
-  <link rel="stylesheet" href="/assets/egress.css?v=20261030-2">
-  <script defer src="/assets/echarts.min.js?v=5.6.0"></script><script defer src="/assets/app.js?v=20261030-5"></script>
+  <link rel="stylesheet" href="/assets/style.css?v=20261030-8">
+  <link rel="stylesheet" href="/assets/egress.css?v=20261030-5">
+  <script defer src="/assets/echarts.min.js?v=5.6.0"></script><script defer src="/assets/app.js?v=20261030-7"></script>
 </head>
 <body>
 <div id="login" class="login-screen">
@@ -25,6 +25,7 @@
       <button class="nav-item" data-page="users"><span class="nav-icon">♧</span>用户与订阅</button>
       <button class="nav-item" data-page="activity"><span class="nav-icon">≋</span>访问记录</button>
       <button class="nav-item" data-page="egress"><span class="nav-icon">⇆</span>电脑出口</button>
+      <button class="nav-item" data-page="egress-records"><span class="nav-icon">≡</span>电脑出口详细记录</button>
       <button class="nav-item" data-page="settings"><span class="nav-icon">⚙</span>管理设置</button>
     </nav>
     <div class="sidebar-info">
@@ -76,6 +77,19 @@
           <div class="egress-foot muted">电脑需开机联网。连接中断时对应采集停止；此连接不会修改电脑的系统代理设置。</div>
         </article>
       </section>
+      <section id="page-egress-records" class="page hidden">
+        <article class="panel list-panel egress-records-panel">
+          <form id="egress-records-search-form" class="search-form" role="search" aria-label="电脑出口记录搜索">
+            <label class="search-field" for="egress-records-device"><span>电脑</span><select id="egress-records-device"><option value="">全部电脑</option></select></label>
+            <label class="search-field" for="egress-records-kind"><span>记录类型</span><select id="egress-records-kind"><option value="">全部类型</option><option value="request">出口访问</option><option value="device">设备事件</option></select></label>
+            <label class="search-field" for="egress-records-outcome"><span>结果</span><select id="egress-records-outcome"><option value="">全部结果</option><option value="success">成功</option><option value="failed">失败</option></select></label>
+            <label class="search-field" for="egress-records-search"><span>域名 / IP</span><input id="egress-records-search" type="search" maxlength="253" placeholder="搜索域名或 IP"></label>
+            <div class="search-actions"><button class="button primary" type="submit">搜索</button><button class="button subtle" type="reset">重置</button></div>
+          </form>
+          <div id="egress-records-table" class="table-wrap scroll-region" tabindex="0" aria-label="电脑出口详细记录表格"></div>
+          <nav id="egress-records-pagination" class="pagination" aria-label="电脑出口详细记录分页"></nav>
+        </article>
+      </section>
       <section id="page-settings" class="page hidden"><div class="scroll-region"><article class="panel password-panel"><div class="panel-heading"><h2>修改管理员密码</h2></div><form id="password-form" class="settings-form"><label for="old-password">原密码</label><input id="old-password" type="password" autocomplete="current-password" required><label for="new-password">新密码</label><input id="new-password" type="password" autocomplete="new-password" required><button class="button primary" type="submit">更新密码</button></form></article></div></section>
     </div>
   </main>
@@ -85,5 +99,5 @@
 <dialog id="confirm-dialog"><div class="modal-heading"><h2 id="confirm-title">重置订阅</h2><button class="icon-button close-dialog" aria-label="关闭">×</button></div><p id="confirm-description" class="muted"></p><div class="modal-actions"><button class="button subtle close-dialog">取消</button><button id="confirm-action" class="button danger">确认重置</button></div></dialog>
 <div id="toast" role="status" aria-live="polite"></div>
 <dialog id="egress-dialog"><form id="egress-form"><div class="modal-heading"><h2>添加这台电脑</h2><button class="icon-button close-dialog" type="button" aria-label="关闭">×</button></div><label for="egress-name">电脑名称</label><input id="egress-name" maxlength="64" required placeholder="例如：我的 Mac"><p id="egress-browser" class="muted"></p><p class="muted">添加后下载连接包，解压并双击其中的连接文件，首次安装后即可自动连接。浏览器设备信息会随电脑登记。</p><div class="modal-actions"><button class="button subtle close-dialog" type="button">取消</button><button class="button primary" type="submit">添加电脑</button></div></form></dialog>
-<script defer src="/assets/egress.js?v=20261030-2"></script>
+<script defer src="/assets/egress.js?v=20261030-3"></script>
 </body></html>

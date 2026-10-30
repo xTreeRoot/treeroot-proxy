@@ -4,6 +4,7 @@ import io
 import json
 import time
 import unittest
+import uuid
 import zipfile
 from unittest.mock import patch
 from fastapi.testclient import TestClient
@@ -103,3 +104,100 @@ class EgressTests(unittest.TestCase):
         restored = self.client.get('/api/egress').json()[0]
         self.assertFalse(restored['enabled'])
         self.assertFalse(restored['paired'])
+
+    def test_connection_records_are_authenticated_deduplicated_and_isolated(self):
+        first, second = self.create(), self.create()
+        _, paired = self.pair(first)
+        path = '/api/egress/' + first['id'] + '/heartbeat'
+        record = {'event_key': uuid.uuid4().hex, 'ts': int(time.time()), 'domain': 'example.org',
+                  'port': 443, 'method': 'CONNECT', 'outcome': 'success', 'upload': 123,
+                  'download': 456, 'duration_ms': 789}
+        headers = {'Authorization': 'Bearer ' + paired['agent_token']}
+        self.assertEqual(self.client.post(path, json={'records': [record]}).status_code, 403)
+        for _ in range(2):
+            response = self.client.post(path, headers=headers, json={'records': [record]})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()['accepted'], [record['event_key']])
+        result = self.client.get('/api/egress/records', params={'kind': 'request'}).json()
+        self.assertEqual(result['total'], 1)
+        item = result['items'][0]
+        self.assertEqual((item['device_id'], item['domain'], item['upload'], item['download']),
+                         (first['id'], 'example.org', 123, 456))
+        for secret in ('event_key', 'agent_hash', 'proxy_password', 'access_code', 'public_key'):
+            self.assertNotIn(secret, item)
+        other_path = '/api/egress/' + second['id'] + '/heartbeat'
+        self.assertEqual(self.client.post(other_path, headers=headers, json={'records': [record]}).status_code, 403)
+        for invalid in [record | {'upload': -1}, record | {'detail': 'secret password'},
+                        record | {'domain': 'https://example.org/path?token=secret'}]:
+            self.assertEqual(self.client.post(path, headers=headers, json={'records': [invalid]}).status_code, 422)
+        self.client.patch('/api/egress/' + first['id'], headers=self.headers, json={'enabled': False})
+        self.assertEqual(self.client.post(path, headers=headers, json={'records': [record]}).status_code, 403)
+        anonymous = TestClient(self.panel.app, base_url='https://testserver')
+        self.addCleanup(anonymous.close)
+        self.assertEqual(anonymous.get('/api/egress/records').status_code, 401)
+
+    def test_record_pagination_filtering_deleted_history_and_retention(self):
+        first, second = self.create(), self.create()
+        now = int(time.time())
+        with self.panel.database() as db:
+            db.executemany('''INSERT INTO egress_events(event_key,device_id,ts,kind,action,outcome,domain,port)
+                VALUES(?,?,?,'request','connection',?,?,443)''',
+                [(uuid.uuid4().hex, first['id'] if i % 2 else second['id'], now,
+                  'failed' if i % 3 else 'success', 'example.org' if i % 2 else 'other.test') for i in range(137)])
+            db.execute('''INSERT INTO egress_events(event_key,device_id,ts,kind,action,outcome)
+                VALUES(?,?,?,'device','created','success')''', (uuid.uuid4().hex, first['id'], now - 8 * 86400))
+        path = '/api/egress/records'
+        first_page = self.client.get(path).json()
+        self.assertEqual((first_page['total'], first_page['pages'], len(first_page['items'])), (139, 6, 25))
+        with self.panel.database() as db:
+            self.panel.egress_manager.event(db, self.panel.egress_manager.row(first['id'], db), 'enabled')
+        seen = [item['id'] for item in first_page['items']]
+        for page in range(2, 7):
+            response = self.client.get(path, params={'page': page, 'before_id': first_page['before_id']}).json()
+            self.assertEqual(response['total'], 139)
+            seen.extend(item['id'] for item in response['items'])
+        self.assertEqual(len(seen), len(set(seen)))
+        self.assertEqual(seen, sorted(seen, reverse=True))
+        filtered = self.client.get(path, params={'device_id': first['id'], 'kind': 'request',
+            'outcome': 'failed', 'search': 'example', 'page_size': 100}).json()
+        self.assertGreater(filtered['total'], 0)
+        self.assertTrue(all(item['device_id'] == first['id'] and item['outcome'] == 'failed' for item in filtered['items']))
+        self.assertEqual(self.client.get(path, params={'search': '%'}).json()['total'], 0)
+        self.assertEqual(self.client.get(path, params={'start': now + 1}).json()['total'], 0)
+        self.assertEqual(self.client.get(path, params={'page': 999}).json()['page'], 6)
+        self.assertEqual(self.client.get(path, params={'search': 'absent', 'page': 999}).json()['page'], 1)
+        for params in [{'page': 0}, {'page_size': 101}, {'outcome': 'unknown'}, {'start': now, 'end': now - 1}]:
+            self.assertEqual(self.client.get(path, params=params).status_code, 422)
+        self.client.delete('/api/egress/' + first['id'], headers=self.headers)
+        self.assertGreater(self.client.get(path, params={'device_id': first['id']}).json()['total'], 0)
+        self.panel.egress_manager.maintain()
+        with self.panel.database() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM egress_events WHERE ts<?', (now - 7 * 86400,)).fetchone()[0], 0)
+            self.assertEqual(db.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+
+    def test_device_events_and_offline_transition_are_not_repeated(self):
+        device = self.create()
+        _, paired = self.pair(device)
+        path = '/api/egress/' + device['id'] + '/heartbeat'
+        headers = {'Authorization': 'Bearer ' + paired['agent_token']}
+        for _ in range(2):
+            self.assertEqual(self.client.post(path, headers=headers, json={}).status_code, 200)
+        with self.panel.database() as db:
+            db.execute('UPDATE egress_devices SET last_seen=? WHERE id=?', (int(time.time()) - 100, device['id']))
+        self.panel.egress_manager.maintain()
+        self.panel.egress_manager.maintain()
+        self.client.post(path, headers=headers, json={})
+        actions = [item['action'] for item in self.client.get('/api/egress/records').json()['items']]
+        self.assertEqual(actions.count('connected'), 2)
+        self.assertEqual(actions.count('disconnected'), 1)
+        for action in ('created', 'setup_downloaded', 'paired'):
+            self.assertIn(action, actions)
+        with self.panel.database() as db:
+            original = dict(db.execute('SELECT * FROM egress_devices WHERE id=?', (device['id'],)).fetchone())
+            before = tuple(db.execute('SELECT client_uuid,token,upload,download FROM users WHERE id=1').fetchone())
+            event_count = db.execute('SELECT COUNT(*) FROM egress_events').fetchone()[0]
+        self.panel.initialize()
+        with self.panel.database() as db:
+            self.assertEqual(dict(db.execute('SELECT * FROM egress_devices WHERE id=?', (device['id'],)).fetchone()), original)
+            self.assertEqual(tuple(db.execute('SELECT client_uuid,token,upload,download FROM users WHERE id=1').fetchone()), before)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM egress_events').fetchone()[0], event_count)

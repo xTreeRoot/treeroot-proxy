@@ -8,7 +8,12 @@ from egress_proxy import ForwardProxy, public_connection
 
 class ProxyTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.proxy = ForwardProxy('fixture', 'secret')
+        self.records = []
+        self.recorded = asyncio.Event()
+        def record(item):
+            self.records.append(item)
+            self.recorded.set()
+        self.proxy = ForwardProxy('fixture', 'secret', on_record=record)
         self.server = await self.proxy.listen()
         self.port = self.server.sockets[0].getsockname()[1]
 
@@ -25,6 +30,7 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
             writer.close()
             await writer.wait_closed()
             connect.assert_not_called()
+            self.assertEqual(self.records, [])
 
     async def test_private_dns_answers_and_other_ports_are_rejected(self):
         for host in ('127.0.0.1', '::1', '192.168.1.1', '169.254.169.254'):
@@ -54,6 +60,24 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await reader.read(128), b'opaque-tls-bytes')
                 writer.close()
                 await writer.wait_closed()
+                await asyncio.wait_for(self.recorded.wait(), 2)
+                record = self.records[0]
+                self.assertEqual((record['domain'], record['port'], record['method']), ('public.test', 443, 'CONNECT'))
+                self.assertEqual((record['upload'], record['download']), (16, 16))
+                self.assertEqual(record['outcome'], 'success')
+                self.assertNotIn('opaque-tls-bytes', str(record))
+                self.assertNotIn(self.proxy.authorization, str(record))
         finally:
             echo_server.close()
             await echo_server.wait_closed()
+
+    async def test_rejected_target_is_recorded_with_no_traffic(self):
+        reader, writer = await asyncio.open_connection('127.0.0.1', self.port)
+        writer.write(('CONNECT 127.0.0.1:443 HTTP/1.1\r\nProxy-Authorization: ' + self.proxy.authorization + '\r\n\r\n').encode())
+        await writer.drain()
+        self.assertIn(b'502', await reader.read())
+        writer.close()
+        await writer.wait_closed()
+        await asyncio.wait_for(self.recorded.wait(), 2)
+        self.assertEqual((self.records[0]['outcome'], self.records[0]['detail']), ('failed', 'target_rejected'))
+        self.assertEqual((self.records[0]['upload'], self.records[0]['download']), (0, 0))
