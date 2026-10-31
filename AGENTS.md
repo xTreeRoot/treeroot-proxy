@@ -5,6 +5,7 @@
 ## 用户约束
 
 - 禁止创建、使用 Git worktree。
+- 仅在 `main` 开发并推送远程主分支，不创建或保留其他分支。
 - 禁止在 Mac 的其他应用内使用 Computer Use；只能在 Codex 内使用。
 - 只修改本项目，不操作 `/Users/xugenyin/file` 下的其他项目。
 - 查阅现有代码和真实配置，复用已有接口；不要猜接口、初始化已有生产数据或盲目重构。
@@ -63,7 +64,7 @@ python3 ops/manage.py status
 
 `update` 自动创建完整备份、发布白名单源文件、只重启面板并检查资源 MIME；成功后把备份下载到 `private/backups/`。它不改 DNS，不覆盖数据库、生产配置、证书或 SSH 信息，不重启 Xray/Caddy。源文件发布失败会恢复原源文件；数据库结构变更不在自动回退范围内。
 
-- 发布白名单：`app.py`、`app.js`、`index.html`、`style.css`、`echarts.min.js`、`backup.py`、`subscription-template.json`、`requirements.txt`、`requirements.lock`。
+- 发布白名单以 `ops/remote.py` 的 `FILES` 为准，包括面板前后端、`egress.py`、`egress.js`、`egress.css`、`connector.py`、`egress_proxy.py`、图表库、备份脚本和锁定依赖。
 - 本地 `ops/`、`docs/`、`AGENTS.md` 和 `private/` 不进入 Web 程序发布包。运维脚本经 SSH 单独上传到 root 私有目录。
 - 更新必须保留用户 ID、UUID、token、启用状态、管理员密码、累计流量和域名历史。
 - 不要重新运行旧的初始部署脚本，不要调用初始化逻辑替代迁移，不要清空 DB 后重新生成用户。
@@ -73,6 +74,13 @@ python3 ops/manage.py status
 
 ## 必须保留的行为
 
+- 菜单分为“运行概览”“出口流量大盘”“代理流量大盘”。运行概览只放服务器资源、主机/系统/运行时信息、项目服务状态和网卡累计收发；不再混放两个流量大盘。
+- 出口大盘六张主卡片为累计流量、最近 24 小时流量、启用电脑数、24 小时连接数、实时上传、实时下载，另有电脑筛选、趋势、目标排名与用量明细。选择 7 天只改变趋势和用量范围，24 小时卡片始终使用最近 24 小时。
+- 出口累计数存入新增 `egress_totals`，按设备与事件 ID 检查点在同一事务增量记账，清理七天明细前先同步。首次上线只回填数据库里仍保留的连接记录，无法补回已删除的历史；之后累计数长期保留，设备删除也保留历史。
+- 新连接器每 5 秒上报进程累计字节与单调时钟，`/api/egress/rates` 使用差分计算正在传输连接的速率。15 秒未更新、重启、计数回退均重新建立基线；仅统计启用且在线的电脑。旧连接器兼容，但需要重新下载安装才能显示真实实时速率；部分电脑未上报时必须说明覆盖数量。
+- 出口累计/24 小时流量在连接结束并上报后入账，离线重试去重。实时速率和已完成连接的字节汇总存在自然时间差，不能把完成记录的平均值冒充实时速率。
+- `/api/server` 必须登录，读取真实系统信息并缓存；不可暴露配置、订阅凭据或私钥。
+
 - 订阅节点地址使用域名 `proxy.treeroot.top`；Clash 与 Shadowrocket 各有订阅格式。
 - 重置订阅同时轮换链接 token 和代理 UUID，保留历史统计。
 - 默认用户“我的设备”和交付时另一真实用户“舅舅”必须保留；不得拿真实用户做破坏性测试。
@@ -81,6 +89,14 @@ python3 ops/manage.py status
 - 验证 JS/CSS 返回 200 且 MIME 正确，不能只检查首页状态码。
 - 统计采集读取 Xray 增量计数和访问日志；重启/迁移必须处理计数基线和日志游标，避免重复计数。
 - 域名访问数量代表连接次数，不等于页面浏览量。当前不统计每个域名的字节数，不解密 HTTPS 正文。
+
+## 源码 Release 与服务器清理
+
+- 用户所说的 Release 是代码库 `releases/` 内打包好的源码备份，不是 GitHub Releases，也不是含生产数据的完整运维备份。本地仓库和服务器 `/root/treeroot-ops/releases` 各只保留最新两个版本。
+- 完成功能、测试和文档后先提交源码，再运行 `python3 ops/releases.py pack vYYYY.MM.DD.N --ref 源码提交`，随后提交生成的两个压缩包、校验文件及 `manifest.json`。包内记录来源提交及逐文件哈希，排除 `private/`、Git、虚拟环境与 `releases/` 自身。
+- `python3 ops/releases.py list` 查看版本；`python3 ops/releases.py sync` 同步两个已验证源码包到服务器私有目录。打包会先验证保留的两版，再删除更老的源码包。源码备份包含文档和运维脚本，不能直接当成 `manage.py update` 的运行文件白名单包。
+- 同步后运行 `python3 ops/manage.py cleanup` 检查，再运行 `python3 ops/manage.py cleanup --apply` 清理。必须先验证服务器上的两份源码包；只删除本项目旧的发布/布局临时包以及 apt/pip 可重建缓存。保留其他项目、当前程序/虚拟环境、配置、证书、数据库、原始访问日志、每日 DB 备份及 `/var/backups/treeroot` 完整运维备份。
+- 本次累计表是兼容新增：部署前备份，并在生产 DB 副本上验证重复初始化、累计数与身份不变。代码回退时保留 `egress_totals` 和最新 DB，重新升级会补记检查点之后尚在保留期内的记录；若旧版长期运行至记录过期，无法恢复其间已删除的明细。
 
 ## 凭据和 SSH
 

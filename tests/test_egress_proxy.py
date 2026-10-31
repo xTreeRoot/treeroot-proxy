@@ -81,3 +81,36 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(self.recorded.wait(), 2)
         self.assertEqual((self.records[0]['outcome'], self.records[0]['detail']), ('failed', 'target_rejected'))
         self.assertEqual((self.records[0]['upload'], self.records[0]['download']), (0, 0))
+
+    async def test_live_snapshot_includes_bytes_before_connection_finishes(self):
+        release = asyncio.Event()
+        async def echo(reader, writer):
+            writer.write(await reader.read(128))
+            await writer.drain()
+            await release.wait()
+            writer.close()
+        server = await asyncio.start_server(echo, '127.0.0.1', 0)
+        port = server.sockets[0].getsockname()[1]
+        async def connect(host, destination_port):
+            return await asyncio.open_connection('127.0.0.1', port)
+        try:
+            with patch('egress_proxy.public_connection', side_effect=connect):
+                reader, writer = await asyncio.open_connection('127.0.0.1', self.port)
+                writer.write(('CONNECT public.test:443 HTTP/1.1\r\nProxy-Authorization: ' + self.proxy.authorization + '\r\n\r\n').encode())
+                await writer.drain()
+                await reader.readuntil(b'\r\n\r\n')
+                writer.write(b'live-bytes')
+                await writer.drain()
+                self.assertEqual(await reader.readexactly(10), b'live-bytes')
+                await asyncio.sleep(0)
+                snapshot = self.proxy.traffic_snapshot()
+                self.assertEqual((snapshot['upload'], snapshot['download']), (10, 10))
+                self.assertEqual(self.records, [])
+                writer.close()
+                await writer.wait_closed()
+                release.set()
+                await asyncio.wait_for(self.recorded.wait(), 2)
+        finally:
+            release.set()
+            server.close()
+            await server.wait_closed()

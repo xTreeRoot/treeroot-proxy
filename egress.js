@@ -6,16 +6,19 @@ let egressRecordFilters={};
 const egressEventNames={created:'添加电脑',setup_downloaded:'下载连接器',paired:'完成配对',connected:'连接器上线',disconnected:'心跳中断',enabled:'启用出口',disabled:'停用出口',deleted:'删除电脑',restored:'恢复电脑',ip_test:'检测出口 IP',connection:'代理连接'};
 const egressRecordDetails={invalid_request:'请求格式无效',target_rejected:'目标地址或端口被拒绝',connection_failed:'网络连接失败',timeout:'连接超时',interrupted:'连接中断'};
 let egressOverviewController,egressOverviewData;
-const egressMetricIds=['total-traffic','upload','download','connections','success-rate','online'];
+const egressMetricIds=['total-traffic','day-traffic','enabled','connections'];
 function egressSuccessRate(connections,succeeded){return connections?(succeeded/connections*100).toFixed(1)+'%':'—';}
 function renderEgressOverview(data){
   const options='<option value="">全部电脑</option>'+data.device_options.map(device=>`<option value="${esc(device.id)}">${esc(device.name)}${device.deleted?'（已删除）':''}</option>`).join('');
   const select=$('#egress-overview-device'),selected=select.value;
   if(select.innerHTML!==options){select.innerHTML=options;select.value=selected;}
-  const values=[bytes(data.upload+data.download),bytes(data.upload),bytes(data.download),data.connections.toLocaleString(),egressSuccessRate(data.connections,data.succeeded),data.online+' / '+data.available];
+  const values=[bytes(data.total_upload+data.total_download),bytes(data.day_upload+data.day_download),data.enabled+' / '+data.available,data.day_connections.toLocaleString()];
   egressMetricIds.forEach((key,index)=>$('#egress-'+key).textContent=values[index]);
-  $('#egress-failed').textContent=`失败 ${(data.connections-data.succeeded).toLocaleString()} 次`;
-  $('#egress-succeeded').textContent=`成功建连 ${data.succeeded.toLocaleString()} 次`;
+  $('#egress-total-breakdown').textContent=`↑ ${bytes(data.total_upload)} · ↓ ${bytes(data.total_download)}`;
+  $('#egress-day-breakdown').textContent=`↑ ${bytes(data.day_upload)} · ↓ ${bytes(data.day_download)}`;
+  $('#egress-online-note').textContent=`当前在线 ${data.online} 台`;
+  $('#egress-failed').textContent=`成功率 ${egressSuccessRate(data.day_connections,data.day_succeeded)} · 失败 ${(data.day_connections-data.day_succeeded).toLocaleString()} 次`;
+  renderEgressRates(data);
   $('#egress-trend-range').textContent=(data.hours===24?'24 小时':'7 天')+' · 每小时';
   renderTraffic(data.series,'egress-traffic-chart',data.hours);
   $('#egress-traffic-chart').setAttribute('aria-label',`电脑出口最近${data.hours===24?'24小时':'7天'}上传${bytes(data.upload)}，下载${bytes(data.download)}`);
@@ -28,7 +31,7 @@ async function refreshEgressOverview(){
   egressOverviewController?.abort();
   const controller=new AbortController();egressOverviewController=controller;
   const device=$('#egress-overview-device').value,hours=$('#egress-overview-hours').value;
-  const current=()=>!controller.signal.aborted&&state.page==='overview'&&device===$('#egress-overview-device').value&&hours===$('#egress-overview-hours').value;
+  const current=()=>!controller.signal.aborted&&state.page==='egress-dashboard'&&device===$('#egress-overview-device').value&&hours===$('#egress-overview-hours').value;
   const status=$('#egress-overview-status');
   status.textContent='正在更新出口统计…';status.classList.remove('error');
   $('#egress-device-usage').setAttribute('aria-busy','true');
@@ -40,7 +43,7 @@ async function refreshEgressOverview(){
   }catch(error){
     if(!current())return;
     egressMetricIds.forEach(key=>$('#egress-'+key).textContent='—');
-    $('#egress-failed').textContent='暂不可用';$('#egress-succeeded').textContent='暂不可用';
+    $('#egress-failed').textContent='暂不可用';
     echarts.getInstanceByDom($('#egress-traffic-chart'))?.clear();
     $('#egress-trend-empty').hidden=true;
     $('#egress-domain-list').innerHTML='<div class="empty">出口统计暂不可用</div>';
@@ -54,8 +57,22 @@ for(const id of ['egress-overview-device','egress-overview-hours'])$('#'+id).add
   echarts.getInstanceByDom($('#egress-traffic-chart'))?.clear();
   $('#egress-domain-list').innerHTML='<div class="empty">正在获取统计…</div>';
   $('#egress-device-usage').innerHTML='<div class="empty">正在获取统计…</div>';
-  refreshEgressOverview();
+  for(const direction of ['upload','download'])$('#egress-speed-'+direction).textContent='—';
+  refreshEgressOverview();refreshEgressRates();
 });
+function renderEgressRates(data){
+  for(const direction of ['upload','download'])$('#egress-speed-'+direction).textContent=data['speed_'+direction]==null?'—':bytes(data['speed_'+direction])+'/s';
+  const note=!data.online_devices?'当前无在线电脑':data.live_devices===data.online_devices?'每 5 秒采样 · 正在传输的流量':data.live_devices?`${data.live_devices} / ${data.online_devices} 台上报实时速率`:'等待采样；旧连接器需重新安装';
+  document.querySelectorAll('.egress-live-note').forEach(element=>element.textContent=note);
+}
+async function refreshEgressRates(){
+  if(state.page!=='egress-dashboard')return;
+  if(state.egressRatesRefreshing){state.egressRatesPending=true;return;}
+  const device=$('#egress-overview-device').value;state.egressRatesRefreshing=true;
+  try{const data=await api('/egress/rates?'+new URLSearchParams({device_id:device}));if(state.page==='egress-dashboard'&&device===$('#egress-overview-device').value)renderEgressRates(data);}
+  catch(error){if(state.page==='egress-dashboard'&&device===$('#egress-overview-device').value){for(const direction of ['upload','download'])$('#egress-speed-'+direction).textContent='—';document.querySelectorAll('.egress-live-note').forEach(element=>element.textContent='实时速率暂不可用');}}
+  finally{state.egressRatesRefreshing=false;if(state.egressRatesPending){state.egressRatesPending=false;refreshEgressRates();}}
+}
 new ResizeObserver(()=>{const element=$('#egress-traffic-chart');if(element.clientWidth)echarts.getInstanceByDom(element)?.resize();}).observe($('#egress-traffic-chart'));
 function openEgressOverviewRecords(deviceId){
   const options=egressOverviewData?.device_options||[];

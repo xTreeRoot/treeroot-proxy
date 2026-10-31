@@ -77,6 +77,8 @@ def main():
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('status')
     sub.add_parser('update')
+    p = sub.add_parser('cleanup', help='Inspect obsolete source packages and reproducible caches')
+    p.add_argument('--apply', action='store_true')
     p = sub.add_parser('backup')
     p.add_argument('--stop-services', action='store_true', help='Migration maintenance: stop old HTTPS/proxy/panel and leave them stopped')
     sub.add_parser('authorize', help='Verify a new SSH host interactively and add this project public key')
@@ -124,6 +126,8 @@ def main():
         subprocess.run(ssh(config, shlex.join(command)), check=True)
         return
     command = ['python3', directory + '/remote.py', args.command, '--public-ip', config['host']]
+    if getattr(args, 'apply', False):
+        command.append('--apply')
     if args.command == 'update':
         with tempfile.TemporaryDirectory() as temporary:
             archive = Path(temporary) / 'release.tar.gz'

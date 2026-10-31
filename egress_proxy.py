@@ -45,6 +45,11 @@ class ForwardProxy:
         self.authorization = 'Basic ' + base64.b64encode((username + ':' + password).encode()).decode()
         self.slots = asyncio.Semaphore(64)
         self.on_record = on_record
+        self.run_id = uuid.uuid4().hex
+        self.traffic = {'upload': 0, 'download': 0}
+
+    def traffic_snapshot(self):
+        return {'run_id': self.run_id, 'sampled_at': time.monotonic(), **self.traffic}
 
     async def pipe(self, reader, writer, record, direction):
         try:
@@ -52,6 +57,7 @@ class ForwardProxy:
                 writer.write(data)
                 await writer.drain()
                 record[direction] += len(data)
+                self.traffic[direction] += len(data)
         except asyncio.TimeoutError:
             record.update(outcome='failed', detail='timeout')
         except OSError:
@@ -107,6 +113,7 @@ class ForwardProxy:
                     upstream.write(('\r\n'.join(forwarded) + '\r\n\r\n').encode('iso-8859-1'))
                     await upstream.drain()
                     record['upload'] += len(('\r\n'.join(forwarded) + '\r\n\r\n').encode('iso-8859-1'))
+                    self.traffic['upload'] += record['upload']
                 established = True
                 record.update(outcome='success', detail='')
                 await asyncio.gather(self.pipe(reader, upstream, record, 'upload'), self.pipe(upstream_reader, writer, record, 'download'))
@@ -129,6 +136,7 @@ class ForwardProxy:
                 upstream.close()
             writer.close()
             if authorized and self.on_record:
+                record['ts'] = int(time.time())
                 record['duration_ms'] = max(0, int((time.monotonic() - started) * 1000))
                 self.on_record(record)
 

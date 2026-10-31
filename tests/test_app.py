@@ -41,6 +41,7 @@ class PanelTests(unittest.TestCase):
         self.panel.RATES.update(sample_time=None, run=None, users={})
         self.panel.STATUS.update(last_poll=None, last_error=None)
         self.panel.RESOURCES.update(sample_time=None, cpu_times=None, data=None)
+        self.panel.SERVER.update(sample_time=None, data=None)
         self.panel.initialize()
         self.client = TestClient(self.panel.app, base_url='https://testserver')
         self.addCleanup(self.client.close)
@@ -278,6 +279,32 @@ class PanelTests(unittest.TestCase):
             self.assertEqual(self.client.get('/api/overview').status_code, 200)
         self.client.cookies.clear()
         self.assertEqual(self.client.get('/api/resources').status_code, 401)
+
+    def test_server_information_is_authenticated_cached_and_uses_real_system_fields(self):
+        proc = {'/proc/cpuinfo': 'model name : Fixture CPU\n',
+                '/proc/net/dev': 'header\nheader\n lo: 1 0 0 0 0 0 0 0 2\n ens17: 100 0 0 0 0 0 0 0 200\n'}
+        output = ('Id=xray.service\nActiveState=active\nSubState=running\nMainPID=123\n'
+                  'MemoryCurrent=2048\nActiveEnterTimestamp=Sat 2026-10-31 00:00:00 UTC\n\n'
+                  'Id=treeroot-backup.timer\nActiveState=active\nSubState=waiting\nMainPID=0\nMemoryCurrent=[not set]\n')
+        with patch.object(self.panel.platform, 'uname', return_value=Mock(node='fixture-host', release='fixture-kernel', machine='x86_64', system='Linux')), \
+             patch.object(self.panel.platform, 'freedesktop_os_release', return_value={'PRETTY_NAME': 'Fixture Linux'}), \
+             patch.object(self.panel.Path, 'read_text', autospec=True, side_effect=lambda path, *a, **k: proc[str(path)]), \
+             patch.object(self.panel.Path, 'iterdir', return_value=iter([Path('/proc/1'), Path('/proc/2'), Path('/proc/net')])), \
+             patch.object(self.panel.subprocess, 'run', return_value=Mock(stdout=output)) as run:
+            first = self.client.get('/api/server')
+            self.assertEqual(first.status_code, 200)
+            data = first.json()
+            self.assertEqual((data['hostname'], data['os'], data['cpu_model'], data['processes']),
+                             ('fixture-host', 'Fixture Linux', 'Fixture CPU', 2))
+            self.assertEqual(data['interfaces'], [{'name': 'ens17', 'received': 100, 'sent': 200}])
+            self.assertEqual((data['services'][0]['pid'], data['services'][0]['memory']), (123, 2048))
+            self.assertIsNone(data['services'][1]['memory'])
+            self.assertEqual(self.client.get('/api/server').json(), data)
+            self.assertEqual(run.call_count, 1)
+            for secret in ('admin_password_hash', 'initial_uuid', 'initial_token', 'ws_path'):
+                self.assertNotIn(secret, data)
+        self.client.cookies.clear()
+        self.assertEqual(self.client.get('/api/server').status_code, 401)
 
     def test_write_csrf_protection_and_resource_cache_headers(self):
         for method, path, body in [('post', '/api/users', {'name': 'test'}),

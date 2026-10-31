@@ -11,6 +11,7 @@ import re
 import secrets
 import socket
 import subprocess
+import threading
 import time
 from typing import Literal
 import uuid
@@ -61,8 +62,16 @@ class ConnectionRecord(BaseModel):
     detail: Literal['', 'invalid_request', 'target_rejected', 'connection_failed', 'timeout', 'interrupted'] = ''
 
 
+class LiveTraffic(BaseModel):
+    run_id: str = Field(pattern=r'^[a-f0-9]{32}$')
+    sampled_at: float = Field(ge=0, allow_inf_nan=False)
+    upload: int = Field(ge=0, le=2**53 - 1)
+    download: int = Field(ge=0, le=2**53 - 1)
+
+
 class HeartbeatEgress(BaseModel):
     records: list[ConnectionRecord] = Field(default_factory=list, max_length=100)
+    traffic: LiveTraffic | None = None
 
 
 def digest(value):
@@ -73,6 +82,8 @@ class Egress:
     def __init__(self, database, config, data, root):
         self.database, self.config, self.root = database, config, root
         self.directory = Path(config.get('egress_dir', str(data / 'egress')))
+        self.rate_lock = threading.Lock()
+        self.live = {}
 
     def initialize(self, data=None):
         """仅新增独立表，既有代理身份、会话及统计不做迁移或重置。"""
@@ -97,7 +108,61 @@ class Egress:
               detail TEXT NOT NULL DEFAULT '',UNIQUE(device_id,event_key))''')
             db.execute('CREATE INDEX IF NOT EXISTS egress_events_device_id ON egress_events(device_id,id DESC)')
             db.execute('CREATE INDEX IF NOT EXISTS egress_events_time ON egress_events(ts)')
+            db.execute('''CREATE TABLE IF NOT EXISTS egress_totals(
+                device_id TEXT PRIMARY KEY REFERENCES egress_devices(id),
+                upload INTEGER NOT NULL,download INTEGER NOT NULL,connections INTEGER NOT NULL,
+                last_event_id INTEGER NOT NULL,since INTEGER NOT NULL)''')
+            self.sync_totals(db)
+        with self.rate_lock:
+            self.live.clear()
         self.publish()
+
+    def sync_totals(self, db, device_id=None):
+        """Use an event ID checkpoint so retries, restarts and retention never recount bytes."""
+        if not db.in_transaction:
+            db.execute('BEGIN IMMEDIATE')
+        checkpoints = db.execute('''SELECT d.id,COALESCE(t.last_event_id,0) last_event_id
+            FROM egress_devices d LEFT JOIN egress_totals t ON t.device_id=d.id'''+
+            (' WHERE d.id=?' if device_id else ''), [device_id] if device_id else []).fetchall()
+        for checkpoint in checkpoints:
+            row = db.execute('''SELECT device_id,SUM(upload) upload,SUM(download) download,
+                COUNT(*) connections,MAX(id) last_event_id,MIN(ts) since FROM egress_events
+                WHERE device_id=? AND id>? AND kind='request' ''',
+                (checkpoint['id'], checkpoint['last_event_id'])).fetchone()
+            if not row['connections']:
+                continue
+            db.execute('''INSERT INTO egress_totals VALUES(?,?,?,?,?,?)
+                ON CONFLICT(device_id) DO UPDATE SET upload=upload+excluded.upload,
+                download=download+excluded.download,connections=connections+excluded.connections,
+                last_event_id=excluded.last_event_id,since=MIN(since,excluded.since)''', tuple(row))
+
+    def sample_traffic(self, device_id, traffic, now):
+        if traffic is None:
+            return
+        sample = traffic.model_dump()
+        with self.rate_lock:
+            previous = self.live.get(device_id)
+            if previous and previous['run_id'] == sample['run_id'] and sample['sampled_at'] <= previous['sampled_at']:
+                return
+            speed = None
+            if (previous and previous['run_id'] == sample['run_id']
+                    and sample['upload'] >= previous['upload'] and sample['download'] >= previous['download']
+                    and now - previous['received_at'] < 15):
+                elapsed = sample['sampled_at'] - previous['sampled_at']
+                if 0 < elapsed <= 15:
+                    speed = {key: (sample[key] - previous[key]) / elapsed for key in ('upload', 'download')}
+            self.live[device_id] = sample | {'received_at': now, 'speed': speed}
+
+    def rates(self, rows, now):
+        online = [row for row in rows if not row['deleted'] and row['enabled'] and row['public_key']
+                  and row['last_seen'] and now - row['last_seen'] < 65]
+        with self.rate_lock:
+            fresh = [self.live[row['id']]['speed'] for row in online
+                     if row['id'] in self.live and now - self.live[row['id']]['received_at'] < 15
+                     and self.live[row['id']]['speed'] is not None]
+        return {'speed_upload': sum(item['upload'] for item in fresh) if fresh or not online else None,
+                'speed_download': sum(item['download'] for item in fresh) if fresh or not online else None,
+                'live_devices': len(fresh), 'online_devices': len(online), 'sampled_at': now}
 
     def event(self, db, row, action, outcome='success', detail='', ts=None, event_key=None):
         db.execute('''INSERT OR IGNORE INTO egress_events
@@ -113,6 +178,7 @@ class Egress:
     def maintain(self):
         now = int(time.time())
         with self.database() as db:
+            self.sync_totals(db)
             for row in db.execute('''SELECT * FROM egress_devices WHERE enabled=1 AND deleted=0
                                      AND public_key IS NOT NULL AND last_seen<=?''', (now - 65,)):
                 self.disconnected(db, row, now)
@@ -191,6 +257,15 @@ def install_routes(app, database, authenticated, config, data, root, report_data
                 SUM(upload) upload,SUM(download) download,COUNT(*) connections,
                 SUM(outcome='success') succeeded,MAX(ts) last_record
                 FROM egress_events''' + where + ' GROUP BY device_id', args)}
+            day = dict(db.execute('''SELECT COALESCE(SUM(upload),0) day_upload,
+                COALESCE(SUM(download),0) day_download,COUNT(*) day_connections,
+                COALESCE(SUM(outcome='success'),0) day_succeeded FROM egress_events
+                WHERE kind='request' AND ts>=? AND ts<=?''' +
+                (' AND device_id=?' if device_id else ''),
+                [now - 86400, now, *([device_id] if device_id else [])]).fetchone())
+            cumulative = dict(db.execute('''SELECT COALESCE(SUM(upload),0) total_upload,
+                COALESCE(SUM(download),0) total_download,MIN(since) total_since FROM egress_totals''' +
+                (' WHERE device_id=?' if device_id else ''), [device_id] if device_id else []).fetchone())
             hourly = {row['bucket']: dict(row) for row in db.execute('''SELECT
                 MIN(CAST((ts-?)/3600 AS INTEGER),?) bucket,
                 SUM(upload) upload,SUM(download) download,COUNT(*) connections
@@ -213,10 +288,11 @@ def install_routes(app, database, authenticated, config, data, root, report_data
         totals = {key: sum(item[key] for item in devices)
                   for key in ('upload', 'download', 'connections', 'succeeded')}
         devices.sort(key=lambda item: (-(item['upload'] + item['download']), item['name'], item['id']))
-        return totals | {
+        return totals | day | cumulative | manager.rates([r for r in rows if not device_id or r['id'] == device_id], now) | {
             'since': since, 'until': now, 'hours': hours,
             'online': sum(item['online'] for item in devices),
             'available': sum(not item['deleted'] for item in devices),
+            'enabled': sum(item['enabled'] and not item['deleted'] for item in devices),
             'last_record': max((item['last_record'] or 0 for item in devices), default=0) or None,
             'device_options': [{key: row[key] for key in ('id', 'name', 'deleted')} for row in rows],
             'devices': devices, 'domains': domains,
@@ -224,6 +300,15 @@ def install_routes(app, database, authenticated, config, data, root, report_data
                         'download': hourly.get(i, {}).get('download', 0),
                         'connections': hourly.get(i, {}).get('connections', 0)} for i in range(hours)],
         }
+
+    @app.get('/api/egress/rates')
+    def rates(device_id: str = '', session=Depends(authenticated)):
+        with database(readonly=True) as db:
+            rows = db.execute('SELECT id,enabled,deleted,public_key,last_seen FROM egress_devices' +
+                              (' WHERE id=?' if device_id else ''), [device_id] if device_id else []).fetchall()
+        if device_id and not rows:
+            raise HTTPException(404, '出口设备不存在')
+        return manager.rates(rows, int(time.time()))
 
     @app.get('/api/egress/records')
     def records(device_id: str = '', kind: Literal['', 'request', 'device'] = '',
@@ -302,6 +387,8 @@ def install_routes(app, database, authenticated, config, data, root, report_data
                 manager.event(db, row, 'enabled' if body.enabled else 'disabled')
             db.execute('UPDATE egress_devices SET enabled=? WHERE id=?', (body.enabled, device_id))
             result = manager.summary(manager.row(device_id, db))
+        with manager.rate_lock:
+            manager.live.pop(device_id, None)
         manager.publish()
         return result
 
@@ -379,6 +466,8 @@ def install_routes(app, database, authenticated, config, data, root, report_data
                       'ssh_port': 22, 'ssh_user': 'treeroot-egress', 'remote_port': row['port'],
                       'known_hosts': config['egress_known_hosts'], 'proxy_username': device_id,
                       'proxy_password': row['proxy_password'], 'agent_token': agent_token}
+        with manager.rate_lock:
+            manager.live.pop(device_id, None)
         manager.publish()
         return result
 
@@ -399,6 +488,8 @@ def install_routes(app, database, authenticated, config, data, root, report_data
                         (record.event_key, device_id, record.ts, record.outcome, record.domain, record.port,
                          record.method, record.upload, record.download, record.duration_ms, row['last_ip'] or '', record.detail))
             db.execute('UPDATE egress_devices SET last_seen=? WHERE id=?', (now, device_id))
+            manager.sync_totals(db, device_id)
+        manager.sample_traffic(device_id, body.traffic, now)
         manager.publish()
         return {'ok': True, 'accepted': [record.event_key for record in body.records]}
 

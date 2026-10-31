@@ -14,9 +14,72 @@ sys.path.insert(0, str(ROOT / 'ops'))
 import bootstrap
 import manage
 import remote
+import releases
 
 
 class OperationsTests(unittest.TestCase):
+    def test_cleanup_validates_two_backups_before_deleting_only_project_packages(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = Path(temporary)
+            ops = folder / 'ops'
+            versions = ops / 'releases'
+            versions.mkdir(parents=True)
+            cache = folder / 'pip'
+            cache.mkdir()
+            (cache / 'cached-wheel').write_bytes(b'cached')
+            obsolete = [ops / 'release-20261030T123456Z.tar.gz', ops / 'layout-abcdef0.py',
+                        versions / 'treeroot-v2026.10.30.1.tar.gz']
+            preserved = [ops / 'socialcrawler-release.tar.gz', ops / 'remote.py',
+                         ops / 'treeroot-20261031T123456.123Z.tar.gz', versions / 'manifest.json']
+            for path in obsolete + preserved:
+                path.write_bytes(b'preserve unless explicitly obsolete')
+            def location(value):
+                return {'/root/treeroot-ops': ops, '/root/.cache/pip': cache}.get(str(value), Path(value))
+            with patch.object(remote, 'Path', side_effect=location), patch.object(remote, 'health'), \
+                 patch.object(remote, 'run') as run, patch.object(remote, 'source_backups') as verify:
+                verify.side_effect = ValueError('missing verified backups')
+                with self.assertRaises(ValueError):
+                    remote.cleanup(True)
+                self.assertTrue(all(path.exists() for path in obsolete))
+                run.assert_not_called()
+                verify.side_effect = None
+                verify.return_value = {'manifest.json', 'new.tar.gz', 'new.tar.gz.sha256'}
+                plan = remote.cleanup()
+                self.assertEqual(set(plan['obsolete_code_packages']), set(map(str, obsolete)))
+                self.assertTrue(cache.exists())
+                remote.cleanup(True)
+                self.assertTrue(all(not path.exists() for path in obsolete))
+                self.assertTrue(all(path.exists() for path in preserved))
+                self.assertFalse(cache.exists())
+                run.assert_called_once_with('apt-get', 'clean')
+
+    def test_source_archives_keep_two_versions_without_private_data(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = Path(temporary)
+            with patch.object(releases, 'FOLDER', folder):
+                for version in (1, 2, 3):
+                    items = releases.pack('v2026.10.31.' + str(version), 'HEAD')
+            self.assertEqual([item['version'] for item in items], ['v2026.10.31.3', 'v2026.10.31.2'])
+            self.assertEqual(len(list(folder.glob('*.tar.gz'))), 2)
+            self.assertFalse((folder / 'treeroot-v2026.10.31.1.tar.gz').exists())
+            kept = remote.source_backups(folder)
+            self.assertEqual(len(kept), 5)
+            for item in items:
+                manifest = releases.verify_archive(folder / item['archive'], item['sha256'])
+                self.assertIn('AGENTS.md', manifest['files'])
+                self.assertIn('ops/manage.py', manifest['files'])
+                self.assertFalse(any(name.startswith(('private/', '.git/', '.venv/', 'releases/')) for name in manifest['files']))
+            (folder / items[0]['archive']).write_bytes(b'corrupt')
+            with self.assertRaisesRegex(ValueError, 'checksum'):
+                remote.source_backups(folder)
+
+    def test_source_backup_allowlist_rejects_secrets_and_recursive_archives(self):
+        for name in ['private/config.json', '.git/config', 'releases/old.tar.gz', 'panel.sqlite3',
+                     '../app.py', '/etc/treeroot/config.json', 'ops/__pycache__/x.pyc']:
+            self.assertFalse(releases.source_allowed(name))
+        self.assertTrue(releases.source_allowed('app.py'))
+        self.assertTrue(releases.source_allowed('docs/DEPLOYMENT.md'))
+
     def test_health_checks_chart_bundle_only_when_page_uses_it(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

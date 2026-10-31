@@ -3,10 +3,12 @@ from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 import hashlib
 import hmac
+import importlib.metadata
 import json
 import logging
 import os
 from pathlib import Path
+import platform
 import re
 import secrets
 import shutil
@@ -35,6 +37,8 @@ HOST = BASE.split('://', 1)[1]
 LOCK = threading.RLock()
 RATE_LOCK = threading.Lock()
 RESOURCE_LOCK = threading.Lock()
+SERVER_LOCK = threading.Lock()
+SERVER = {'sample_time': None, 'data': None}
 RESOURCES = {'sample_time': None, 'cpu_times': None, 'data': None}
 HASH_SLOTS = threading.BoundedSemaphore(2)
 REPORT_SLOTS = threading.BoundedSemaphore(8)
@@ -584,6 +588,67 @@ def server_resource_snapshot():
 @app.get('/api/resources')
 def resources(session=Depends(authenticated)):
     return server_resource_snapshot()
+
+
+@app.get('/api/server')
+def server_information(session=Depends(authenticated)):
+    with SERVER_LOCK:
+        now = time.monotonic()
+        if SERVER['data'] is not None and 0 <= now - SERVER['sample_time'] < 10:
+            return SERVER['data']
+        system = platform.uname()
+        data = {'sampled_at': int(time.time()), 'hostname': system.node, 'kernel': system.release,
+                'architecture': system.machine, 'os': system.system, 'cpu_model': None,
+                'python': platform.python_version(), 'domain': HOST, 'protocol': 'VMess · WebSocket · TLS',
+                'timezone': time.tzname[0], 'processes': None, 'database_bytes': None,
+                'interfaces': [], 'services': [], 'versions': {}}
+        try:
+            data['os'] = platform.freedesktop_os_release().get('PRETTY_NAME', system.system)
+        except OSError:
+            pass
+        try:
+            data['cpu_model'] = next(line.split(':', 1)[1].strip() for line in
+                Path('/proc/cpuinfo').read_text().splitlines() if line.startswith('model name'))
+        except (OSError, StopIteration, IndexError):
+            pass
+        try:
+            data['processes'] = sum(path.name.isdigit() for path in Path('/proc').iterdir())
+        except OSError:
+            pass
+        try:
+            data['database_bytes'] = DB.stat().st_size + sum(path.stat().st_size for path in
+                [Path(str(DB) + '-wal')] if path.exists())
+        except OSError:
+            pass
+        try:
+            for line in Path('/proc/net/dev').read_text().splitlines()[2:]:
+                name, values = line.split(':', 1)
+                if name.strip() != 'lo':
+                    fields = values.split()
+                    data['interfaces'].append({'name': name.strip(), 'received': int(fields[0]), 'sent': int(fields[8])})
+        except (OSError, ValueError, IndexError):
+            pass
+        for package in ('fastapi', 'uvicorn'):
+            try:
+                data['versions'][package] = importlib.metadata.version(package)
+            except importlib.metadata.PackageNotFoundError:
+                pass
+        try:
+            response = subprocess.run(['systemctl', 'show', 'xray.service', 'caddy.service',
+                'treeroot-panel.service', 'treeroot-backup.timer',
+                '--property=Id,ActiveState,SubState,MainPID,MemoryCurrent,ActiveEnterTimestamp'],
+                capture_output=True, text=True, timeout=2, check=True)
+            for block in response.stdout.strip().split('\n\n'):
+                properties = dict(line.split('=', 1) for line in block.splitlines() if '=' in line)
+                if properties.get('Id'):
+                    data['services'].append({'name': properties['Id'], 'state': properties.get('ActiveState'),
+                        'detail': properties.get('SubState'), 'pid': int(properties.get('MainPID', '0')),
+                        'memory': int(properties['MemoryCurrent']) if properties.get('MemoryCurrent', '').isdigit() else None,
+                        'started_at': properties.get('ActiveEnterTimestamp', '')})
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+        SERVER.update(sample_time=now, data=data)
+        return data
 
 
 @app.get('/api/overview')

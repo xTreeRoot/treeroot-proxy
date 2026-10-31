@@ -152,7 +152,8 @@ async def run(device_id):
                     records = []
                     try:
                         records = await asyncio.to_thread(queue.batch)
-                        result = await asyncio.to_thread(api, config, '/heartbeat', {'records': records}, config['agent_token'])
+                        payload = {'records': records, 'traffic': proxy.traffic_snapshot()}
+                        result = await asyncio.to_thread(api, config, '/heartbeat', payload, config['agent_token'])
                         await asyncio.to_thread(queue.acknowledge, result.get('accepted', []))
                     except urllib.error.HTTPError as error:
                         if error.code in (403, 404):
@@ -161,7 +162,7 @@ async def run(device_id):
                     except (OSError, ValueError, sqlite3.Error):
                         pass
                     try:
-                        await asyncio.wait_for(process.wait(), 5 if records else 20)
+                        await asyncio.wait_for(process.wait(), 5)
                     except asyncio.TimeoutError:
                         continue
             finally:

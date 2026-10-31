@@ -1,7 +1,7 @@
 'use strict';
 const $ = s => document.querySelector(s);
 const state = {csrf:'',users:[],page:'overview',filter:'',userFilter:'',activityFilter:'',activitySearch:'',usersLoadedAt:0,lastFullRefresh:0,edit:null,refreshing:false,pagination:{users:{page:1,size:6},usage:{page:1,size:6},activity:{page:1,size:25,anchor:null},'egress-records':{page:1,size:25,anchor:null}},activityRequest:0};
-const titles = {overview:'运行概览',users:'用户与订阅',activity:'访问记录',egress:'电脑出口','egress-records':'电脑出口详细记录',settings:'管理设置'};
+const titles = {overview:'运行概览','egress-dashboard':'出口流量大盘','proxy-dashboard':'代理流量大盘',users:'用户与订阅',activity:'访问记录',egress:'电脑出口','egress-records':'电脑出口详细记录',settings:'管理设置'};
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function bytes(value){value=Number(value)||0;if(value<1024)return Math.round(value)+' B';const n=Math.min(Math.floor(Math.log(value)/Math.log(1024)),4);return (value/1024**n).toFixed(n>1?2:1)+' '+['B','KB','MB','GB','TB'][n];}
 function date(value){return value?new Date(value*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}):'—';}
@@ -10,7 +10,7 @@ function toast(message){$('#toast').textContent=message;$('#toast').classList.ad
 function showLogin(){state.csrf='';$('#app').classList.add('hidden');$('#login').classList.remove('hidden');}
 async function api(path,options={}){const response=await fetch('/api'+path,{...options,signal:options.signal||AbortSignal.timeout(options.method?60000:10000),headers:{'Content-Type':'application/json','X-CSRF-Token':state.csrf,...options.headers}});let data;try{data=await response.json();}catch{throw new Error('服务器暂时无法响应');}if(!response.ok){if(response.status===401&&path!='/login')showLogin();const message=Array.isArray(data.detail)?data.detail.map(x=>x.msg).join('；'):data.detail;throw new Error(message||'请求失败，请稍后重试');}return data;}
 async function busy(button,work){if(button.disabled)return;button.disabled=true;try{return await work();}catch(error){toast(error.message);}finally{button.disabled=false;}}
-function page(name){state.page=name;$('#app').classList.toggle('records-view',name==='egress-records');document.querySelectorAll('.page').forEach(x=>x.classList.add('hidden'));$('#page-'+name).classList.remove('hidden');document.querySelectorAll('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.page===name));document.title='TreeRoot · '+titles[name];if(name==='overview'&&trafficChart)requestAnimationFrame(()=>trafficChart.resize());refresh();}
+function page(name){state.page=name;$('#app').classList.toggle('records-view',name==='egress-records');document.querySelectorAll('.page').forEach(x=>x.classList.add('hidden'));$('#page-'+name).classList.remove('hidden');document.querySelectorAll('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.page===name));document.title='TreeRoot · '+titles[name];if(name==='proxy-dashboard'&&trafficChart)requestAnimationFrame(()=>trafficChart.resize());refresh();}
 function badge(enabled){return `<span class="badge ${enabled?'':'off'}"><i class="dot"></i>${enabled?'已启用':'已禁用'}</span>`;}
 function avatar(name){return `<span class="mini-avatar">${esc(name.slice(0,1))}</span>`;}
 function pagination(name,total,pages){
@@ -30,7 +30,7 @@ function renderUsers(){
   if(state.page==='users'){
   $('#user-cards').innerHTML=cardPage('users',visible).map(u=>`<article class="user-card"><div class="user-card-head"><div class="user-card-name">${avatar(u.name)}<div><h2>${esc(u.name)}</h2><small>${date(u.created)}</small></div></div>${badge(u.enabled)}</div><div class="user-stats"><div><span>累计流量</span><b>${bytes(u.upload+u.download)}</b></div><div><span>访问域名</span><b>${u.domains}</b></div><div><span>累计连接</span><b>${u.connections.toLocaleString()}</b></div></div><div class="user-card-actions"><button class="button primary" data-action="subscription" data-id="${u.id}">订阅链接</button><button class="button subtle" data-action="view" data-id="${u.id}">查看统计</button><button class="text-button" data-action="rename" data-id="${u.id}">重命名</button><button class="text-button" data-action="toggle" data-id="${u.id}">${u.enabled?'禁用':'启用'}</button><button class="text-button" data-action="reset" data-id="${u.id}">重置订阅</button></div></article>`).join('')||'<div class="empty">暂无用户</div>';
   }
-  if(state.page==='overview'){
+  if(state.page==='proxy-dashboard'){
   $('#overview-user-filter').value=state.filter;
   $('#usage-title').textContent=selected?(state.users.find(u=>String(u.id)===selected)?.name||'用户')+' · 使用情况':'用户使用情况';
   $('#overview-reset').classList.toggle('hidden',!selected);
@@ -39,7 +39,7 @@ function renderUsers(){
 }
 let trafficChart;
 function renderTraffic(points,target='traffic-chart',hours=24){
-  if(state.page!=='overview')return;
+  if((target==='traffic-chart'&&state.page!=='proxy-dashboard')||(target==='egress-traffic-chart'&&state.page!=='egress-dashboard'))return;
   const element=$('#'+target),chart=echarts.getInstanceByDom(element)||echarts.init(element,null,{renderer:'svg'});
   if(target==='traffic-chart')trafficChart=chart;
   const axis={show:true,lineStyle:{color:'#3a4a63',width:0.5}};
@@ -90,8 +90,19 @@ async function refreshResources(){
 async function refreshRates(){
   if(!state.csrf||state.ratesRefreshing)return;
   state.ratesRefreshing=true;
-  const filter=state.page==='overview'?state.filter:'';
-  try{const data=await api('/rates'+(filter?'?user_id='+filter:''));if(filter===(state.page==='overview'?state.filter:''))renderRates(data);}catch(error){if(state.csrf){$('#health').classList.add('warning');$('#health-text').textContent='连接异常';}}finally{state.ratesRefreshing=false;}
+  const filter=state.page==='proxy-dashboard'?state.filter:'';
+  try{const data=await api('/rates'+(filter?'?user_id='+filter:''));if(filter===(state.page==='proxy-dashboard'?state.filter:''))renderRates(data);}catch(error){if(state.csrf){$('#health').classList.add('warning');$('#health-text').textContent='连接异常';}}finally{state.ratesRefreshing=false;}
+}
+async function refreshServerInformation(){
+  if(state.page!=='overview')return;
+  try{
+    const data=await api('/server');if(state.page!=='overview')return;
+    const fields=[['主机名',data.hostname],['操作系统',data.os],['内核版本',data.kernel],['系统架构',data.architecture],['CPU 型号',data.cpu_model],['服务器时区',data.timezone],['网站域名',data.domain],['代理协议',data.protocol],['Python 版本',data.python],['FastAPI / uvicorn',[data.versions.fastapi,data.versions.uvicorn].filter(Boolean).join(' / ')],['系统进程数',data.processes],['数据库大小',data.database_bytes==null?null:bytes(data.database_bytes)]];
+    $('#server-details').innerHTML=fields.map(([name,value])=>`<div class="server-detail"><span>${esc(name)}</span><strong>${esc(value??'暂不可用')}</strong></div>`).join('');
+    const names={'xray.service':'Xray 代理','caddy.service':'Caddy HTTPS','treeroot-panel.service':'TreeRoot 面板','treeroot-backup.timer':'每日备份定时器'};
+    $('#server-services').innerHTML=data.services.length?'<table><thead><tr><th>服务</th><th>状态</th><th>进程</th><th>内存</th></tr></thead><tbody>'+data.services.map(item=>`<tr><td>${esc(names[item.name]||item.name)}<small class="service-start">${esc(item.started_at||'')}</small></td><td><span class="badge ${item.state==='active'?'':'off'}"><i class="dot"></i>${item.state==='active'?'运行中':esc(item.state||'未知')}</span></td><td class="mono">${item.pid||'—'}</td><td class="mono">${item.memory==null?'—':bytes(item.memory)}</td></tr>`).join('')+'</tbody></table>':'<div class="empty">暂时无法读取服务状态</div>';
+    $('#server-network').innerHTML=data.interfaces.length?'<table><thead><tr><th>网卡</th><th>累计接收</th><th>累计发送</th></tr></thead><tbody>'+data.interfaces.map(item=>`<tr><td class="mono">${esc(item.name)}</td><td class="mono">${bytes(item.received)}</td><td class="mono">${bytes(item.sent)}</td></tr>`).join('')+'</tbody></table>':'<div class="empty">暂时无法读取网卡信息</div>';
+  }catch(error){if(state.page==='overview')$('#server-details').innerHTML='<div class="empty">服务器信息读取失败，将自动重试</div>';}
 }
 async function renderActivity(){
   state.activityController?.abort();
@@ -119,9 +130,10 @@ async function refresh(){
     if(pageAtStart==='egress'){await refreshEgress();state.lastFullRefresh=Date.now();return;}
     if(pageAtStart==='egress-records'){await refreshEgressRecords();state.lastFullRefresh=Date.now();return;}
     if(pageAtStart==='settings'){await refreshRates();return;}
-    if(pageAtStart==='overview'){
-      refreshResources();
-      const [,overview]=await Promise.all([loadUsers(),api('/overview'+(filterAtStart?'?user_id='+filterAtStart:'')),refreshEgressOverview()]);
+    if(pageAtStart==='overview'){await Promise.all([refreshResources(),refreshServerInformation()]);state.lastFullRefresh=Date.now();return;}
+    if(pageAtStart==='egress-dashboard'){await Promise.all([refreshEgressOverview(),refreshEgressRates()]);state.lastFullRefresh=Date.now();return;}
+    if(pageAtStart==='proxy-dashboard'){
+      const [,overview]=await Promise.all([loadUsers(),api('/overview'+(filterAtStart?'?user_id='+filterAtStart:''))]);
       if(pageAtStart!==state.page||filterAtStart!==state.filter){state.pending=true;return;}
       renderUsers();renderOverview(overview);
     }else{
@@ -139,7 +151,7 @@ async function copy(selector){try{await navigator.clipboard.writeText($(selector
 document.addEventListener('click',event=>{const button=event.target.closest('[data-pagination]');if(!button||button.disabled)return;const name=button.dataset.pagination,paging=state.pagination[name];paging.page+=Number(button.dataset.step);if(name==='activity'||name==='egress-records'){if(paging.page===1)paging.anchor=null;$('#'+name+'-table').scrollTop=0;(name==='activity'?renderActivity():renderEgressRecords()).catch(e=>toast(e.message));}else{renderUsers();if(name==='users')$('#user-cards').parentElement.scrollTop=0;}});
 document.addEventListener('change',event=>{const name=event.target.dataset.pageSize;if(!name)return;const paging=state.pagination[name];paging.size=Number(event.target.value);paging.page=1;if(name==='activity'||name==='egress-records'){paging.anchor=null;$('#'+name+'-table').scrollTop=0;(name==='activity'?renderActivity():renderEgressRecords()).catch(e=>toast(e.message));}else{renderUsers();if(name==='users')$('#user-cards').parentElement.scrollTop=0;}});
 $('#login-form').addEventListener('submit',async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;$('#login-error').textContent='';try{await enter(await api('/login',{method:'POST',body:JSON.stringify({username:$('#username').value,password:$('#password').value})}));}catch(error){$('#login-error').textContent=error.message;}finally{button.disabled=false;}});
-document.addEventListener('click',async event=>{const nav=event.target.closest('[data-page]');if(nav){if(nav.dataset.page==='overview'){state.filter='';resetPagination('usage');}page(nav.dataset.page);return;}const close=event.target.closest('.close-dialog');if(close){close.closest('dialog').close();return;}const button=event.target.closest('[data-action]');if(!button)return;const user=state.users.find(u=>u.id===Number(button.dataset.id));if(!user)return;const action=button.dataset.action;if(action==='subscription')subscription(user);if(action==='view'){state.filter=String(user.id);resetPagination('usage');page('overview');}if(action==='rename'){state.edit=user.id;$('#user-modal-title').textContent='重命名用户';$('#user-name').value=user.name;$('#user-dialog').showModal();}if(action==='toggle')await busy(button,async()=>{await api('/users/'+user.id,{method:'PATCH',body:JSON.stringify({enabled:!user.enabled})});toast(user.enabled?'用户已禁用，新连接将被拒绝':'用户已启用');state.usersLoadedAt=0;await refresh();});if(action==='reset'){$('#confirm-title').textContent='重置「'+user.name+'」的订阅';$('#confirm-description').textContent='这会更换订阅链接与节点凭据，原链接将失效。已导入该用户的设备需要重新导入新链接。累计统计会保留。';$('#confirm-action').dataset.id=user.id;$('#confirm-dialog').showModal();}});
+document.addEventListener('click',async event=>{const nav=event.target.closest('[data-page]');if(nav){if(nav.dataset.page==='proxy-dashboard'){state.filter='';resetPagination('usage');}page(nav.dataset.page);return;}const close=event.target.closest('.close-dialog');if(close){close.closest('dialog').close();return;}const button=event.target.closest('[data-action]');if(!button)return;const user=state.users.find(u=>u.id===Number(button.dataset.id));if(!user)return;const action=button.dataset.action;if(action==='subscription')subscription(user);if(action==='view'){state.filter=String(user.id);resetPagination('usage');page('proxy-dashboard');}if(action==='rename'){state.edit=user.id;$('#user-modal-title').textContent='重命名用户';$('#user-name').value=user.name;$('#user-dialog').showModal();}if(action==='toggle')await busy(button,async()=>{await api('/users/'+user.id,{method:'PATCH',body:JSON.stringify({enabled:!user.enabled})});toast(user.enabled?'用户已禁用，新连接将被拒绝':'用户已启用');state.usersLoadedAt=0;await refresh();});if(action==='reset'){$('#confirm-title').textContent='重置「'+user.name+'」的订阅';$('#confirm-description').textContent='这会更换订阅链接与节点凭据，原链接将失效。已导入该用户的设备需要重新导入新链接。累计统计会保留。';$('#confirm-action').dataset.id=user.id;$('#confirm-dialog').showModal();}});
 $('#add-user').addEventListener('click',()=>{state.edit=null;$('#user-modal-title').textContent='新增用户';$('#user-name').value='';$('#user-dialog').showModal();});
 $('#user-form').addEventListener('submit',async event=>{event.preventDefault();await busy(event.submitter,async()=>{const user=await api(state.edit?'/users/'+state.edit:'/users',{method:state.edit?'PATCH':'POST',body:JSON.stringify({name:$('#user-name').value})});$('#user-dialog').close();state.usersLoadedAt=0;await refresh();if(!state.edit)subscription(user);toast('用户已保存');});});
 $('#confirm-action').addEventListener('click',event=>busy(event.currentTarget,async()=>{const user=await api('/users/'+event.currentTarget.dataset.id+'/reset',{method:'POST',body:'{}'});$('#confirm-dialog').close();state.usersLoadedAt=0;await refresh();subscription(user);toast('订阅已重置，请重新导入新链接');}));
@@ -152,5 +164,5 @@ $('#overview-reset').addEventListener('click',()=>{state.filter='';resetPaginati
 $('#overview-user-filter').addEventListener('change',event=>{state.filter=event.target.value;resetPagination('usage');refresh();refreshRates();});
 $('#logout').addEventListener('click',event=>busy(event.currentTarget,async()=>{await api('/logout',{method:'POST',body:'{}'});showLogin();}));
 $('#password-form').addEventListener('submit',event=>{event.preventDefault();busy(event.submitter,async()=>{await api('/password',{method:'POST',body:JSON.stringify({current:$('#old-password').value,password:$('#new-password').value})});event.target.reset();toast('管理员密码已更新');});});
-setInterval(()=>{if(document.hidden||!state.csrf)return;refreshRates();refreshResources();if(state.page!=='settings'&&Date.now()-state.lastFullRefresh>=15000)refresh();},5000);
+setInterval(()=>{if(document.hidden||!state.csrf)return;refreshRates();refreshResources();if(state.page==='egress-dashboard')refreshEgressRates();if(state.page!=='settings'&&Date.now()-state.lastFullRefresh>=15000)refresh();},5000);
 document.addEventListener('DOMContentLoaded',()=>api('/me').then(data=>data.authenticated?enter(data):showLogin()).catch(()=>showLogin()));

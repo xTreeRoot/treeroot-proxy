@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -195,15 +196,82 @@ def status():
     return {'services': services, 'sqlite': integrity, 'users': users, 'enabled': enabled, 'static_resources': 'ok'}
 
 
+def source_backups(directory):
+    """Verify the two code backups before any obsolete deployment package is removed."""
+    directory = Path(directory)
+    items = json.loads((directory / 'manifest.json').read_text())
+    if len(items) != 2 or len({item['version'] for item in items}) != 2:
+        raise ValueError('Two distinct source backup versions are required')
+    keep = {'manifest.json'}
+    for item in items:
+        if not re.fullmatch(r'v\d{4}\.\d{2}\.\d{2}\.\d+', item['version']):
+            raise ValueError('Invalid source version')
+        name = 'treeroot-' + item['version'] + '.tar.gz'
+        if item['archive'] != name:
+            raise ValueError('Unexpected source archive name')
+        path = directory / name
+        if path.is_symlink() or digest(path) != item['sha256']:
+            raise ValueError('Source backup checksum mismatch')
+        if (directory / (name + '.sha256')).read_text().split() != [item['sha256'], name]:
+            raise ValueError('Source checksum file mismatch')
+        with tarfile.open(path) as archive:
+            names = []
+            for member in archive.getmembers():
+                parts = Path(member.name).parts
+                if (not member.isfile() or not parts or '..' in parts or Path(member.name).is_absolute()
+                        or parts[0] in ('private', '.git', '.venv', 'work', 'releases')):
+                    raise ValueError('Unsafe source backup member')
+                names.append(member.name)
+            manifest = json.load(archive.extractfile('release-manifest.json'))
+            if (manifest['version'] != item['version'] or manifest['commit'] != item['commit']
+                    or set(manifest['files']) != set(names) - {'release-manifest.json'}
+                    or len(names) != len(set(names)) or not set(FILES).issubset(names)):
+                raise ValueError('Source backup manifest mismatch')
+            for name_in_archive, expected in manifest['files'].items():
+                if hashlib.sha256(archive.extractfile(name_in_archive).read()).hexdigest() != expected:
+                    raise ValueError('Source backup file mismatch')
+        keep.update((name, name + '.sha256'))
+    return keep
+
+
+def cleanup(apply=False):
+    health()
+    directory = Path('/root/treeroot-ops')
+    versions = directory / 'releases'
+    keep = source_backups(versions)
+    candidates = [p for p in versions.iterdir() if p.name not in keep and p.is_file() and not p.is_symlink()
+                  and re.fullmatch(r'treeroot-v\d{4}\.\d{2}\.\d{2}\.\d+\.tar\.gz(?:\.sha256)?', p.name)]
+    candidates += [p for p in directory.iterdir() if p.is_file() and not p.is_symlink() and
+                   re.fullmatch(r'(?:release-\d{8}T\d{6}Z\.tar\.gz|layout-[a-f0-9]{7,40}\.(?:tar\.gz|py))', p.name)]
+    cache = Path('/root/.cache/pip')
+    before = shutil.disk_usage('/').free
+    result = {'applied': apply, 'obsolete_code_packages': [str(p) for p in candidates],
+              'code_bytes': sum(p.stat().st_size for p in candidates),
+              'keep_source_files': sorted(keep), 'operational_backups_preserved': True,
+              'cache_cleanup': ['/var/cache/apt/archives', str(cache)]}
+    if apply:
+        for path in candidates:
+            path.unlink()
+        run('apt-get', 'clean')
+        if cache.is_dir() and not cache.is_symlink():
+            shutil.rmtree(cache)
+        health()
+        result['freed_bytes'] = shutil.disk_usage('/').free - before
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('command', choices=['status', 'backup', 'update'])
+    parser.add_argument('command', choices=['status', 'backup', 'update', 'cleanup'])
+    parser.add_argument('--apply', action='store_true', help='Apply the inspected cleanup plan')
     parser.add_argument('--public-ip', default='186.244.200.45')
     parser.add_argument('--archive')
     parser.add_argument('--stop-services', action='store_true')
     args = parser.parse_args()
     if args.command == 'status':
         result = status()
+    elif args.command == 'cleanup':
+        result = cleanup(args.apply)
     elif args.command == 'backup':
         result = backup(args.public_ip, args.stop_services)
     else:

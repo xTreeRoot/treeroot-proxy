@@ -144,6 +144,7 @@ class EgressTests(unittest.TestCase):
         self.addCleanup(anonymous.close)
         path = '/api/egress/overview'
         self.assertEqual(anonymous.get(path).status_code, 401)
+        self.assertEqual(anonymous.get('/api/egress/rates').status_code, 401)
         empty = self.client.get(path).json()
         for key in ('upload', 'download', 'connections', 'succeeded', 'online', 'available'):
             self.assertEqual(empty[key], 0)
@@ -155,6 +156,73 @@ class EgressTests(unittest.TestCase):
         for value in (0, 1, 25, 169, 'invalid'):
             self.assertEqual(self.client.get(path, params={'hours': value}).status_code, 422)
         self.assertEqual(len(self.client.get(path, params={'hours': 168}).json()['series']), 168)
+
+    def test_cumulative_migration_retention_retry_and_restart_preserve_totals(self):
+        device = self.create()
+        _, paired = self.pair(device)
+        now = int(time.time())
+        with self.panel.database() as db:
+            db.execute('DROP TABLE egress_totals')
+            db.execute('''INSERT INTO egress_events
+                (event_key,device_id,ts,kind,action,outcome,upload,download)
+                VALUES(?,?,?,'request','connection','success',100,200)''',
+                (uuid.uuid4().hex, device['id'], now - 8 * 86400))
+            identity = tuple(db.execute('SELECT client_uuid,token,upload,download FROM users WHERE id=1').fetchone())
+        for _ in range(2):
+            self.panel.initialize()
+            self.panel.egress_manager.maintain()
+            data = self.client.get('/api/egress/overview').json()
+            self.assertEqual((data['total_upload'], data['total_download'], data['day_connections']), (100, 200, 0))
+        record = {'event_key': uuid.uuid4().hex, 'ts': now, 'domain': 'example.org',
+                  'outcome': 'success', 'upload': 5, 'download': 7}
+        for _ in range(2):
+            response = self.client.post('/api/egress/' + device['id'] + '/heartbeat',
+                headers={'Authorization': 'Bearer ' + paired['agent_token']}, json={'records': [record]})
+            self.assertEqual(response.status_code, 200)
+        self.panel.initialize()
+        data = self.client.get('/api/egress/overview').json()
+        self.assertEqual((data['total_upload'], data['total_download'], data['day_connections']), (105, 207, 1))
+        # A legacy rollback may append events without updating the new ledger.
+        with self.panel.database() as db:
+            db.execute('''INSERT INTO egress_events
+                (event_key,device_id,ts,kind,action,outcome,upload,download)
+                VALUES(?,?,?,'request','connection','success',3,4)''', (uuid.uuid4().hex, device['id'], now))
+        self.panel.initialize()
+        self.panel.initialize()
+        data = self.client.get('/api/egress/overview').json()
+        self.assertEqual((data['total_upload'], data['total_download']), (108, 211))
+        with self.panel.database(readonly=True) as db:
+            self.assertEqual(tuple(db.execute('SELECT client_uuid,token,upload,download FROM users WHERE id=1').fetchone()), identity)
+            self.assertEqual(db.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+
+    def test_live_rates_active_counters_staleness_restarts_and_device_isolation(self):
+        first, second = self.create(), self.create()
+        _, paired = self.pair(first)
+        headers = {'Authorization': 'Bearer ' + paired['agent_token']}
+        path = '/api/egress/' + first['id'] + '/heartbeat'
+        run = uuid.uuid4().hex
+        now = int(time.time())
+        def report(offset, sampled, upload, download, run_id=run):
+            with patch('egress.time.time', return_value=now + offset):
+                response = self.client.post(path, headers=headers, json={'traffic': {
+                    'run_id': run_id, 'sampled_at': sampled, 'upload': upload, 'download': download}})
+                self.assertEqual(response.status_code, 200)
+                return self.client.get('/api/egress/rates').json()
+        self.assertIsNone(report(0, 10, 1000, 2000)['speed_upload'])
+        sample = report(5, 15, 1500, 3000)
+        self.assertEqual((sample['speed_upload'], sample['speed_download'], sample['live_devices']), (100, 200, 1))
+        self.assertEqual(report(6, 15, 1500, 3000)['speed_upload'], 100)
+        with patch('egress.time.time', return_value=now + 21):
+            self.assertIsNone(self.client.get('/api/egress/rates').json()['speed_upload'])
+            other = self.client.get('/api/egress/rates', params={'device_id': second['id']}).json()
+            self.assertEqual(other['speed_upload'], 0)
+        self.assertIsNone(report(22, 30, 1600, 3200)['speed_upload'])
+        self.assertEqual(report(27, 35, 1700, 3400)['speed_upload'], 20)
+        self.assertIsNone(report(28, 1, 0, 0, uuid.uuid4().hex)['speed_upload'])
+        self.assertEqual(self.client.post('/api/egress/' + second['id'] + '/heartbeat', headers=headers,
+            json={'traffic': {'run_id': run, 'sampled_at': 20, 'upload': 1, 'download': 1}}).status_code, 403)
+        self.client.patch('/api/egress/' + first['id'], headers=self.headers, json={'enabled': False})
+        self.assertEqual(self.client.get('/api/egress/rates').json()['speed_upload'], 0)
 
     def test_overview_windows_devices_deleted_history_and_consistent_totals(self):
         first, second, idle = self.create(), self.create(), self.create()
@@ -188,6 +256,9 @@ class EgressTests(unittest.TestCase):
             idle_data = self.client.get('/api/egress/overview', params={'device_id': idle['id']}).json()
         self.assertEqual((day['upload'], day['download'], day['connections'], day['succeeded']), (142, 254, 4, 3))
         self.assertEqual((week['upload'], week['download'], week['connections'], week['succeeded']), (163, 286, 6, 4))
+        self.assertEqual((week['day_upload'], week['day_download'], week['day_connections']),
+                         (day['day_upload'], day['day_download'], day['day_connections']))
+        self.assertEqual(day['enabled'], 2)
         self.assertEqual((day['online'], day['available'], day['last_record']), (1, 2, now))
         self.assertEqual(day['domains'][0], {'domain': 'example.org', 'connections': 3, 'upload': 112, 'download': 214})
         self.assertEqual((selected['upload'], selected['download'], selected['connections']), (135, 246, 3))
