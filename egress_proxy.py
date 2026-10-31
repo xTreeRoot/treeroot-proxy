@@ -9,6 +9,15 @@ import uuid
 from urllib.parse import urlsplit
 
 
+# Chromium 后台同步和自动填充请求当前不属于 SocialCrawlerHub 的平台链路；
+# 在电脑出口无法访问这些精确主机时直接失败，避免每次等待完整的目标建连超时。
+FAST_FAIL_HOSTS = frozenset({
+    'accounts.google.com',
+    'www.google.com',
+    'content-autofill.googleapis.com',
+})
+
+
 async def public_connection(host, port):
     if port not in (80, 443):
         raise ValueError('Unsupported port')
@@ -73,50 +82,56 @@ class ForwardProxy:
         record = {'event_key': uuid.uuid4().hex, 'ts': int(time.time()), 'domain': '', 'port': None,
                   'method': '', 'outcome': 'failed', 'upload': 0, 'download': 0, 'detail': 'invalid_request'}
         try:
+            head = await asyncio.wait_for(reader.readuntil(b'\r\n\r\n'), 10)
+            lines = head.decode('iso-8859-1').split('\r\n')
+            method, target, version = lines[0].split(' ')
+            headers = {}
+            for line in lines[1:]:
+                if line:
+                    key, value = line.split(':', 1)
+                    headers[key.lower()] = value.strip()
+            if not hmac.compare_digest(headers.get('proxy-authorization', '').encode('iso-8859-1'), self.authorization.encode('ascii')):
+                writer.write(b'HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="TreeRoot"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
+                await writer.drain()
+                return
+            authorized = True
+            if not method.isascii() or not method.isalpha() or not method.isupper() or len(method) > 16:
+                raise ValueError('Invalid method')
+            record['method'] = method
+            destination = urlsplit('//' + target if method == 'CONNECT' else target)
+            if destination.username or destination.password or not destination.hostname:
+                raise ValueError('Invalid destination')
+            port = destination.port or (443 if method == 'CONNECT' else 80)
+            if method != 'CONNECT' and destination.scheme != 'http':
+                raise ValueError('Unsupported protocol')
+            host = destination.hostname.encode('idna').decode('ascii').lower().rstrip('.')
+            if len(host) > 253 or any(char not in 'abcdefghijklmnopqrstuvwxyz0123456789.:%_-' for char in host):
+                raise ValueError('Invalid hostname')
+            record.update(domain=host, port=port, detail='target_rejected')
+            if host in FAST_FAIL_HOSTS:
+                record['detail'] = 'target_blacklisted'
+                raise ValueError('Target host is blacklisted')
+            # 只限制目标建连并发；已建立的 TLS 隧道不再长期占用建连槽，
+            # 避免某个不可达目标的 15 秒失败把后续抖音请求排队到超时。
             async with self.slots:
-                head = await asyncio.wait_for(reader.readuntil(b'\r\n\r\n'), 10)
-                lines = head.decode('iso-8859-1').split('\r\n')
-                method, target, version = lines[0].split(' ')
-                headers = {}
-                for line in lines[1:]:
-                    if line:
-                        key, value = line.split(':', 1)
-                        headers[key.lower()] = value.strip()
-                if not hmac.compare_digest(headers.get('proxy-authorization', '').encode('iso-8859-1'), self.authorization.encode('ascii')):
-                    writer.write(b'HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="TreeRoot"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
-                    await writer.drain()
-                    return
-                authorized = True
-                if not method.isascii() or not method.isalpha() or not method.isupper() or len(method) > 16:
-                    raise ValueError('Invalid method')
-                record['method'] = method
-                destination = urlsplit('//' + target if method == 'CONNECT' else target)
-                if destination.username or destination.password or not destination.hostname:
-                    raise ValueError('Invalid destination')
-                port = destination.port or (443 if method == 'CONNECT' else 80)
-                if method != 'CONNECT' and destination.scheme != 'http':
-                    raise ValueError('Unsupported protocol')
-                host = destination.hostname.encode('idna').decode('ascii').lower().rstrip('.')
-                if len(host) > 253 or any(char not in 'abcdefghijklmnopqrstuvwxyz0123456789.:%_-' for char in host):
-                    raise ValueError('Invalid hostname')
-                record.update(domain=host, port=port, detail='target_rejected')
                 upstream_reader, upstream = await public_connection(destination.hostname, port)
-                if method == 'CONNECT':
-                    writer.write(b'HTTP/1.1 200 Connection Established\r\n\r\n')
-                    await writer.drain()
-                else:
-                    path = destination.path or '/'
-                    if destination.query:
-                        path += '?' + destination.query
-                    forwarded = [f'{method} {path} {version}', *[
-                        line for line in lines[1:] if line and not line.lower().startswith(('proxy-authorization:', 'proxy-connection:'))]]
-                    upstream.write(('\r\n'.join(forwarded) + '\r\n\r\n').encode('iso-8859-1'))
-                    await upstream.drain()
-                    record['upload'] += len(('\r\n'.join(forwarded) + '\r\n\r\n').encode('iso-8859-1'))
-                    self.traffic['upload'] += record['upload']
-                established = True
-                record.update(outcome='success', detail='')
-                await asyncio.gather(self.pipe(reader, upstream, record, 'upload'), self.pipe(upstream_reader, writer, record, 'download'))
+            if method == 'CONNECT':
+                writer.write(b'HTTP/1.1 200 Connection Established\r\n\r\n')
+                await writer.drain()
+            else:
+                path = destination.path or '/'
+                if destination.query:
+                    path += '?' + destination.query
+                forwarded = [f'{method} {path} {version}', *[
+                    line for line in lines[1:] if line and not line.lower().startswith(('proxy-authorization:', 'proxy-connection:'))]]
+                payload = ('\r\n'.join(forwarded) + '\r\n\r\n').encode('iso-8859-1')
+                upstream.write(payload)
+                await upstream.drain()
+                record['upload'] += len(payload)
+                self.traffic['upload'] += len(payload)
+            established = True
+            record.update(outcome='success', detail='')
+            await asyncio.gather(self.pipe(reader, upstream, record, 'upload'), self.pipe(upstream_reader, writer, record, 'download'))
         except asyncio.CancelledError:
             record.update(outcome='failed', detail='interrupted')
             raise

@@ -4,7 +4,7 @@ let egressTrash=false;
 let egressRecordRequest=0,egressRecordController,egressRecordDevicesLoadedAt=0;
 let egressRecordFilters={};
 const egressEventNames={created:'添加电脑',setup_downloaded:'下载连接器',paired:'完成配对',connected:'连接器上线',disconnected:'心跳中断',enabled:'启用出口',disabled:'停用出口',deleted:'删除电脑',restored:'恢复电脑',ip_test:'检测出口 IP',connection:'代理连接'};
-const egressRecordDetails={invalid_request:'请求格式无效',target_rejected:'目标地址或端口被拒绝',connection_failed:'网络连接失败',timeout:'连接超时',interrupted:'连接中断'};
+const egressRecordDetails={invalid_request:'请求格式无效',target_rejected:'目标地址或端口被拒绝',target_blacklisted:'目标主机在当前出口黑名单中',connection_failed:'网络连接失败',timeout:'连接超时',interrupted:'连接中断'};
 let egressOverviewController,egressOverviewData;
 const egressMetricIds=['total-traffic','day-traffic','enabled','connections'];
 function egressSuccessRate(connections,succeeded){return connections?(succeeded/connections*100).toFixed(1)+'%':'—';}

@@ -82,6 +82,20 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((self.records[0]['outcome'], self.records[0]['detail']), ('failed', 'target_rejected'))
         self.assertEqual((self.records[0]['upload'], self.records[0]['download']), (0, 0))
 
+    async def test_exact_blacklisted_hosts_fail_without_network_connect(self):
+        for host in ('accounts.google.com', 'www.google.com', 'content-autofill.googleapis.com'):
+            with self.subTest(host=host), patch('egress_proxy.public_connection', new_callable=AsyncMock) as connect:
+                reader, writer = await asyncio.open_connection('127.0.0.1', self.port)
+                writer.write((f'CONNECT {host}:443 HTTP/1.1\r\nProxy-Authorization: {self.proxy.authorization}\r\n\r\n').encode())
+                await writer.drain()
+                self.assertIn(b'502', await reader.read())
+                writer.close()
+                await writer.wait_closed()
+                await asyncio.wait_for(self.recorded.wait(), 2)
+                self.assertEqual(self.records[-1]['detail'], 'target_blacklisted')
+                connect.assert_not_called()
+                self.recorded.clear()
+
     async def test_live_snapshot_includes_bytes_before_connection_finishes(self):
         release = asyncio.Event()
         async def echo(reader, writer):
@@ -112,5 +126,35 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(self.recorded.wait(), 2)
         finally:
             release.set()
+            server.close()
+            await server.wait_closed()
+
+    async def test_established_tunnel_does_not_hold_connection_slot(self):
+        release = asyncio.Event()
+        async def hold(reader, writer):
+            await release.wait()
+            writer.close()
+            await writer.wait_closed()
+        server = await asyncio.start_server(hold, '127.0.0.1', 0)
+        port = server.sockets[0].getsockname()[1]
+        self.proxy.slots = asyncio.Semaphore(1)
+        async def connect(host, destination_port):
+            return await asyncio.open_connection('127.0.0.1', port)
+        clients = []
+        try:
+            with patch('egress_proxy.public_connection', side_effect=connect):
+                for _ in range(2):
+                    reader, writer = await asyncio.open_connection('127.0.0.1', self.port)
+                    writer.write(('CONNECT public.test:443 HTTP/1.1\r\nProxy-Authorization: ' + self.proxy.authorization + '\r\n\r\n').encode())
+                    await writer.drain()
+                    clients.append((reader, writer))
+                for reader, _writer in clients:
+                    self.assertIn(b'200', await asyncio.wait_for(reader.readuntil(b'\r\n\r\n'), 1))
+        finally:
+            release.set()
+            for _reader, writer in clients:
+                writer.close()
+                await writer.wait_closed()
+            await asyncio.sleep(0.05)
             server.close()
             await server.wait_closed()
