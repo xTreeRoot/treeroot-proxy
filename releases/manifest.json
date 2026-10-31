@@ -1,0 +1,16 @@
+[
+  {
+    "version": "v2026.10.31.2",
+    "commit": "dc770561180862fed0ddf47fd0413678d520001f",
+    "archive": "treeroot-v2026.10.31.2.tar.gz",
+    "sha256": "94085981a500f115df02a33c42ee3f2a3372d0e8c2688f05decf2331074fa086",
+    "created_at": "2026-10-31T09:51:59.436884+00:00"
+  },
+  {
+    "version": "v2026.10.31.1",
+    "commit": "4c62bb99859865906a8edd162094147cccd39237",
+    "archive": "treeroot-v2026.10.31.1.tar.gz",
+    "sha256": "45f5166215295b7f471b916e539ebdf928435bbd2527564cf4ddecdd328e1241",
+    "created_at": "2026-10-31T09:51:58.863802+00:00"
+  }
+]
