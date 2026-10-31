@@ -169,6 +169,62 @@ def install_routes(app, database, authenticated, config, data, root, report_data
         with database(readonly=True) as db:
             return [manager.summary(row) for row in db.execute('SELECT * FROM egress_devices WHERE deleted=? ORDER BY created,id', (deleted,))]
 
+    @app.get('/api/egress/overview')
+    def overview(device_id: str = '', hours: int = 24, session=Depends(authenticated)):
+        if hours not in (24, 168):
+            raise HTTPException(422, '统计范围仅支持最近 24 小时或 7 天')
+        now = int(time.time())
+        since = now - hours * 3600
+        where = " WHERE kind='request' AND ts>=? AND ts<=?"
+        args = [since, now]
+        if device_id:
+            where += ' AND device_id=?'
+            args.append(device_id)
+        with report_database() as db:
+            # Keep cards, charts and rankings on the same SQLite read snapshot.
+            db.execute('BEGIN')
+            rows = db.execute('''SELECT id,name,deleted,enabled,public_key,last_seen
+                                 FROM egress_devices ORDER BY deleted,created,id''').fetchall()
+            if device_id and not any(row['id'] == device_id for row in rows):
+                raise HTTPException(404, '出口设备不存在')
+            grouped = {row['device_id']: dict(row) for row in db.execute('''SELECT device_id,
+                SUM(upload) upload,SUM(download) download,COUNT(*) connections,
+                SUM(outcome='success') succeeded,MAX(ts) last_record
+                FROM egress_events''' + where + ' GROUP BY device_id', args)}
+            hourly = {row['bucket']: dict(row) for row in db.execute('''SELECT
+                MIN(CAST((ts-?)/3600 AS INTEGER),?) bucket,
+                SUM(upload) upload,SUM(download) download,COUNT(*) connections
+                FROM egress_events''' + where + ' GROUP BY bucket', [since, hours - 1, *args])}
+            domains = [dict(row) for row in db.execute('''SELECT domain,COUNT(*) connections,
+                SUM(upload) upload,SUM(download) download FROM egress_events''' + where +
+                " AND domain<>'' GROUP BY domain ORDER BY connections DESC,domain LIMIT 12", args)]
+        devices = []
+        for row in rows:
+            if device_id and row['id'] != device_id:
+                continue
+            item = {key: row[key] for key in ('id', 'name', 'last_seen')}
+            item.update(deleted=bool(row['deleted']), enabled=bool(row['enabled']),
+                        online=bool(not row['deleted'] and row['enabled'] and row['public_key']
+                                    and row['last_seen'] and now - row['last_seen'] < 65))
+            item.update(grouped.get(row['id'], {'upload': 0, 'download': 0, 'connections': 0,
+                                                'succeeded': 0, 'last_record': None}))
+            item.pop('device_id', None)
+            devices.append(item)
+        totals = {key: sum(item[key] for item in devices)
+                  for key in ('upload', 'download', 'connections', 'succeeded')}
+        devices.sort(key=lambda item: (-(item['upload'] + item['download']), item['name'], item['id']))
+        return totals | {
+            'since': since, 'until': now, 'hours': hours,
+            'online': sum(item['online'] for item in devices),
+            'available': sum(not item['deleted'] for item in devices),
+            'last_record': max((item['last_record'] or 0 for item in devices), default=0) or None,
+            'device_options': [{key: row[key] for key in ('id', 'name', 'deleted')} for row in rows],
+            'devices': devices, 'domains': domains,
+            'series': [{'ts': since + i * 3600, 'upload': hourly.get(i, {}).get('upload', 0),
+                        'download': hourly.get(i, {}).get('download', 0),
+                        'connections': hourly.get(i, {}).get('connections', 0)} for i in range(hours)],
+        }
+
     @app.get('/api/egress/records')
     def records(device_id: str = '', kind: Literal['', 'request', 'device'] = '',
                 outcome: Literal['', 'success', 'failed'] = '', search: str = Query(default='', max_length=253),

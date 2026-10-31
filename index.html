@@ -5,8 +5,8 @@
   <meta name="color-scheme" content="dark"><title>TreeRoot · 代理管理</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23111a29'/%3E%3Ctext x='11' y='45' font-family='sans-serif' font-size='40' font-weight='bold' fill='%235addc0'%3Etr%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="/assets/style.css?v=20261030-8">
-  <link rel="stylesheet" href="/assets/egress.css?v=20261030-5">
-  <script defer src="/assets/echarts.min.js?v=5.6.0"></script><script defer src="/assets/app.js?v=20261030-7"></script>
+  <link rel="stylesheet" href="/assets/egress.css?v=20261031-1">
+  <script defer src="/assets/echarts.min.js?v=5.6.0"></script><script defer src="/assets/app.js?v=20261031-1"></script>
 </head>
 <body>
 <div id="login" class="login-screen">
@@ -56,6 +56,30 @@
               <div class="resource-item"><div class="resource-label">持续运行</div><div id="server-uptime" class="resource-value">—</div><div class="resource-note">服务器启动至今</div></div>
             </div>
           </article>
+          <section class="egress-dashboard" aria-labelledby="egress-dashboard-title">
+            <div class="egress-dashboard-heading">
+              <div><h2 id="egress-dashboard-title">电脑出口流量</h2><p class="muted">服务器经电脑访问目标的流量，按已结束连接统计</p></div>
+              <div class="egress-dashboard-filters">
+                <label for="egress-overview-device">电脑<select id="egress-overview-device"><option value="">全部电脑</option></select></label>
+                <label for="egress-overview-hours">统计范围<select id="egress-overview-hours"><option value="24">最近 24 小时</option><option value="168">最近 7 天</option></select></label>
+              </div>
+            </div>
+            <div id="egress-overview-status" class="egress-overview-status muted" role="status">正在获取出口统计</div>
+            <div class="egress-metric-grid">
+              <article class="metric"><div class="metric-label">出口总流量<span>⇆</span></div><div class="metric-value" id="egress-total-traffic">—</div><div class="metric-note">所选时段上传与下载之和</div></article>
+              <article class="metric"><div class="metric-label">出口上传<span>↑</span></div><div class="metric-value" id="egress-upload">—</div><div class="metric-note">电脑 → 目标网站</div></article>
+              <article class="metric"><div class="metric-label">出口下载<span>↓</span></div><div class="metric-value" id="egress-download">—</div><div class="metric-note">目标网站 → 电脑</div></article>
+              <article class="metric"><div class="metric-label">出口连接数<span>⇄</span></div><div class="metric-value" id="egress-connections">—</div><div class="metric-note" id="egress-failed">包含成功与失败连接</div></article>
+              <article class="metric"><div class="metric-label">连接成功率<span>✓</span></div><div class="metric-value" id="egress-success-rate">—</div><div class="metric-note" id="egress-succeeded">成功建连占比</div></article>
+              <article class="metric"><div class="metric-label">当前在线电脑<span>◎</span></div><div class="metric-value" id="egress-online">—</div><div class="metric-note">在线 / 未删除电脑</div></article>
+            </div>
+            <div class="chart-grid">
+              <article class="panel"><div class="panel-heading"><h2>出口流量趋势</h2><span id="egress-trend-range" class="tag">每小时</span></div><div id="egress-traffic-chart" class="traffic-chart" role="img" aria-label="电脑出口上传和下载流量趋势"></div><p id="egress-trend-empty" class="egress-chart-note muted" hidden>暂无出口连接数据；连接结束并上报后显示流量。</p></article>
+              <article class="panel"><div class="panel-heading"><h2>常用出口目标</h2><span class="tag">TOP 12 · 连接数</span></div><div id="egress-domain-list" class="domain-list"><div class="empty">等待统计</div></div></article>
+            </div>
+            <article class="panel"><div class="panel-heading"><h2>电脑出口用量</h2><button id="egress-overview-records" class="text-button">查看详细记录 →</button></div><div id="egress-device-usage" class="table-wrap scroll-region" tabindex="0" aria-label="各电脑出口流量统计"><div class="empty">等待统计</div></div></article>
+            <p class="egress-dashboard-note muted">明细保留 7 天；断网期间的数据在重连后补报。旧版连接器需重新下载安装，才会上报流量。此统计独立于代理用户流量。</p>
+          </section>
           <div class="chart-grid">
             <article class="panel"><div class="panel-heading"><h2>流量趋势</h2><span class="tag">24 小时</span></div><div id="traffic-chart" class="traffic-chart" role="img" aria-label="最近24小时上传和下载流量"></div></article>
             <article class="panel"><div class="panel-heading"><h2>常用访问域名</h2><span class="tag">TOP 12</span></div><div id="domain-list" class="domain-list"></div></article>
@@ -83,6 +107,7 @@
             <label class="search-field" for="egress-records-device"><span>电脑</span><select id="egress-records-device"><option value="">全部电脑</option></select></label>
             <label class="search-field" for="egress-records-kind"><span>记录类型</span><select id="egress-records-kind"><option value="">全部类型</option><option value="request">出口访问</option><option value="device">设备事件</option></select></label>
             <label class="search-field" for="egress-records-outcome"><span>结果</span><select id="egress-records-outcome"><option value="">全部结果</option><option value="success">成功</option><option value="failed">失败</option></select></label>
+            <label class="search-field" for="egress-records-hours"><span>统计范围</span><select id="egress-records-hours"><option value="168">最近 7 天</option><option value="24">最近 24 小时</option></select></label>
             <label class="search-field" for="egress-records-search"><span>域名 / IP</span><input id="egress-records-search" type="search" maxlength="253" placeholder="搜索域名或 IP"></label>
             <div class="search-actions"><button class="button primary" type="submit">搜索</button><button class="button subtle" type="reset">重置</button></div>
           </form>
@@ -99,5 +124,5 @@
 <dialog id="confirm-dialog"><div class="modal-heading"><h2 id="confirm-title">重置订阅</h2><button class="icon-button close-dialog" aria-label="关闭">×</button></div><p id="confirm-description" class="muted"></p><div class="modal-actions"><button class="button subtle close-dialog">取消</button><button id="confirm-action" class="button danger">确认重置</button></div></dialog>
 <div id="toast" role="status" aria-live="polite"></div>
 <dialog id="egress-dialog"><form id="egress-form"><div class="modal-heading"><h2>添加这台电脑</h2><button class="icon-button close-dialog" type="button" aria-label="关闭">×</button></div><label for="egress-name">电脑名称</label><input id="egress-name" maxlength="64" required placeholder="例如：我的 Mac"><p id="egress-browser" class="muted"></p><p class="muted">添加后下载连接包，解压并双击其中的连接文件，首次安装后即可自动连接。浏览器设备信息会随电脑登记。</p><div class="modal-actions"><button class="button subtle close-dialog" type="button">取消</button><button class="button primary" type="submit">添加电脑</button></div></form></dialog>
-<script defer src="/assets/egress.js?v=20261030-3"></script>
+<script defer src="/assets/egress.js?v=20261031-1"></script>
 </body></html>

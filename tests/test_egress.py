@@ -123,6 +123,9 @@ class EgressTests(unittest.TestCase):
         item = result['items'][0]
         self.assertEqual((item['device_id'], item['domain'], item['upload'], item['download']),
                          (first['id'], 'example.org', 123, 456))
+        overview = self.client.get('/api/egress/overview').json()
+        self.assertEqual((overview['connections'], overview['succeeded'], overview['upload'], overview['download']),
+                         (1, 1, 123, 456))
         for secret in ('event_key', 'agent_hash', 'proxy_password', 'access_code', 'public_key'):
             self.assertNotIn(secret, item)
         other_path = '/api/egress/' + second['id'] + '/heartbeat'
@@ -135,6 +138,75 @@ class EgressTests(unittest.TestCase):
         anonymous = TestClient(self.panel.app, base_url='https://testserver')
         self.addCleanup(anonymous.close)
         self.assertEqual(anonymous.get('/api/egress/records').status_code, 401)
+
+    def test_overview_empty_authentication_and_validation(self):
+        anonymous = TestClient(self.panel.app, base_url='https://testserver')
+        self.addCleanup(anonymous.close)
+        path = '/api/egress/overview'
+        self.assertEqual(anonymous.get(path).status_code, 401)
+        empty = self.client.get(path).json()
+        for key in ('upload', 'download', 'connections', 'succeeded', 'online', 'available'):
+            self.assertEqual(empty[key], 0)
+        self.assertEqual((empty['devices'], empty['domains'], empty['device_options']), ([], [], []))
+        self.assertIsNone(empty['last_record'])
+        self.assertEqual(len(empty['series']), 24)
+        self.assertTrue(all(point['upload'] == point['download'] == point['connections'] == 0 for point in empty['series']))
+        self.assertEqual(self.client.get(path, params={'device_id': 'missing'}).status_code, 404)
+        for value in (0, 1, 25, 169, 'invalid'):
+            self.assertEqual(self.client.get(path, params={'hours': value}).status_code, 422)
+        self.assertEqual(len(self.client.get(path, params={'hours': 168}).json()['series']), 168)
+
+    def test_overview_windows_devices_deleted_history_and_consistent_totals(self):
+        first, second, idle = self.create(), self.create(), self.create()
+        removed = self.client.request('DELETE', '/api/egress/' + second['id'], headers=self.headers, json={})
+        self.assertEqual(removed.status_code, 200)
+        now = int(time.time())
+        records = [
+            (first['id'], now - 86400 - 1, 'older.test', 'success', 10, 20),
+            (first['id'], now - 86400, 'example.org', 'success', 100, 200),
+            (first['id'], now - 1, 'failed.test', 'failed', 30, 40),
+            (first['id'], now, 'example.org', 'success', 5, 6),
+            (second['id'], now - 3600, 'example.org', 'success', 7, 8),
+            (second['id'], now - 7 * 86400, 'oldest.test', 'failed', 11, 12),
+            (first['id'], now - 7 * 86400 - 1, 'expired.test', 'success', 9999, 9999),
+            (first['id'], now + 1, 'future.test', 'success', 9999, 9999),
+        ]
+        with self.panel.database() as db:
+            db.execute('UPDATE egress_devices SET public_key=?,last_seen=? WHERE id=?', ('fixture', now, first['id']))
+            db.executemany('''INSERT INTO egress_events
+                (event_key,device_id,ts,kind,action,domain,outcome,upload,download)
+                VALUES(?,?,?,'request','connection',?,?,?,?)''',
+                [(uuid.uuid4().hex, *record) for record in records])
+            db.execute('''INSERT INTO egress_events(event_key,device_id,ts,kind,action,outcome,upload,download)
+                VALUES(?,?,?,'device','ip_test','success',10000,10000)''', (uuid.uuid4().hex, first['id'], now))
+            before = tuple(db.execute('SELECT client_uuid,token,upload,download FROM users WHERE id=1').fetchone())
+        with patch('egress.time.time', return_value=now):
+            day = self.client.get('/api/egress/overview').json()
+            week = self.client.get('/api/egress/overview', params={'hours': 168}).json()
+            selected = self.client.get('/api/egress/overview', params={'device_id': first['id']}).json()
+            deleted = self.client.get('/api/egress/overview', params={'device_id': second['id']}).json()
+            idle_data = self.client.get('/api/egress/overview', params={'device_id': idle['id']}).json()
+        self.assertEqual((day['upload'], day['download'], day['connections'], day['succeeded']), (142, 254, 4, 3))
+        self.assertEqual((week['upload'], week['download'], week['connections'], week['succeeded']), (163, 286, 6, 4))
+        self.assertEqual((day['online'], day['available'], day['last_record']), (1, 2, now))
+        self.assertEqual(day['domains'][0], {'domain': 'example.org', 'connections': 3, 'upload': 112, 'download': 214})
+        self.assertEqual((selected['upload'], selected['download'], selected['connections']), (135, 246, 3))
+        self.assertEqual([item['id'] for item in selected['devices']], [first['id']])
+        self.assertEqual(len(selected['device_options']), 3)
+        self.assertTrue(deleted['devices'][0]['deleted'])
+        self.assertEqual((deleted['connections'], deleted['online'], deleted['available']), (1, 0, 0))
+        self.assertEqual((idle_data['connections'], idle_data['upload'], idle_data['download']), (0, 0, 0))
+        for data in (day, week, selected, deleted, idle_data):
+            self.assertEqual(data['until'] - data['since'], data['hours'] * 3600)
+            self.assertEqual(len(data['series']), data['hours'])
+            for key in ('upload', 'download', 'connections'):
+                self.assertEqual(sum(item[key] for item in data['series']), data[key])
+                self.assertEqual(sum(item[key] for item in data['devices']), data[key])
+            for item in data['devices'] + data['device_options']:
+                for secret in ('access_code', 'proxy_password', 'agent_hash', 'pair_hash', 'public_key', 'port'):
+                    self.assertNotIn(secret, item)
+        with self.panel.database(readonly=True) as db:
+            self.assertEqual(tuple(db.execute('SELECT client_uuid,token,upload,download FROM users WHERE id=1').fetchone()), before)
 
     def test_record_pagination_filtering_deleted_history_and_retention(self):
         first, second = self.create(), self.create()

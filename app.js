@@ -38,17 +38,18 @@ function renderUsers(){
   }
 }
 let trafficChart;
-function renderTraffic(points){
+function renderTraffic(points,target='traffic-chart',hours=24){
   if(state.page!=='overview')return;
-  if(!trafficChart)trafficChart=echarts.init($('#traffic-chart'),null,{renderer:'svg'});
+  const element=$('#'+target),chart=echarts.getInstanceByDom(element)||echarts.init(element,null,{renderer:'svg'});
+  if(target==='traffic-chart')trafficChart=chart;
   const axis={show:true,lineStyle:{color:'#3a4a63',width:0.5}};
-  trafficChart.setOption({
+  chart.setOption({
     animation:!matchMedia('(prefers-reduced-motion: reduce)').matches,
     color:['#729dff','#5addc0'],textStyle:{fontFamily:'-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif'},
     grid:{left:16,right:22,top:42,bottom:18,containLabel:true},
     legend:{top:0,right:18,itemWidth:12,itemHeight:6,textStyle:{color:'#98a8c1',fontSize:10}},
     tooltip:{trigger:'axis',backgroundColor:'#152238',borderColor:'#354762',textStyle:{color:'#edf2fb',fontSize:12},valueFormatter:value=>bytes(value)},
-    xAxis:{type:'category',boundaryGap:false,data:points.map(p=>new Date(p.ts*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false})),axisLine:axis,axisTick:{show:false},axisLabel:{color:'#98a8c1',fontSize:10,hideOverlap:true}},
+    xAxis:{type:'category',boundaryGap:false,data:points.map(p=>new Date(p.ts*1000).toLocaleString('zh-CN',{...(hours>24?{month:'2-digit',day:'2-digit'}:{}),hour:'2-digit',minute:'2-digit',hour12:false})),axisLine:axis,axisTick:{show:false},axisLabel:{color:'#98a8c1',fontSize:10,hideOverlap:true}},
     yAxis:{type:'value',min:0,axisLine:axis,axisTick:{show:false},axisLabel:{color:'#98a8c1',fontSize:10,formatter:value=>bytes(value)},splitLine:{lineStyle:{color:'#26344a',width:0.5}}},
     series:[{name:'下载',type:'line',data:points.map(p=>p.download),showSymbol:false,lineStyle:{width:1.5},areaStyle:{opacity:0.08}},{name:'上传',type:'line',data:points.map(p=>p.upload),showSymbol:false,lineStyle:{width:1.5},areaStyle:{opacity:0.04}}]
   });
@@ -120,7 +121,7 @@ async function refresh(){
     if(pageAtStart==='settings'){await refreshRates();return;}
     if(pageAtStart==='overview'){
       refreshResources();
-      const [,overview]=await Promise.all([loadUsers(),api('/overview'+(filterAtStart?'?user_id='+filterAtStart:''))]);
+      const [,overview]=await Promise.all([loadUsers(),api('/overview'+(filterAtStart?'?user_id='+filterAtStart:'')),refreshEgressOverview()]);
       if(pageAtStart!==state.page||filterAtStart!==state.filter){state.pending=true;return;}
       renderUsers();renderOverview(overview);
     }else{
@@ -152,4 +153,4 @@ $('#overview-user-filter').addEventListener('change',event=>{state.filter=event.
 $('#logout').addEventListener('click',event=>busy(event.currentTarget,async()=>{await api('/logout',{method:'POST',body:'{}'});showLogin();}));
 $('#password-form').addEventListener('submit',event=>{event.preventDefault();busy(event.submitter,async()=>{await api('/password',{method:'POST',body:JSON.stringify({current:$('#old-password').value,password:$('#new-password').value})});event.target.reset();toast('管理员密码已更新');});});
 setInterval(()=>{if(document.hidden||!state.csrf)return;refreshRates();refreshResources();if(state.page!=='settings'&&Date.now()-state.lastFullRefresh>=15000)refresh();},5000);
-api('/me').then(data=>data.authenticated?enter(data):showLogin()).catch(()=>showLogin());
+document.addEventListener('DOMContentLoaded',()=>api('/me').then(data=>data.authenticated?enter(data):showLogin()).catch(()=>showLogin()));
