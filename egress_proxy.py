@@ -166,7 +166,9 @@ class ForwardProxy:
             if authorized and self.on_record:
                 record['ts'] = int(time.time())
                 record['duration_ms'] = max(0, int((time.monotonic() - started) * 1000))
-                self.on_record(record)
+                # 记录落盘会打开 SQLite 并等待文件锁；不能在代理事件循环中同步执行，
+                # 否则一条连接结束时会阻塞其他请求解析 CONNECT，黑名单请求也会被拖到数秒后才失败。
+                await asyncio.to_thread(self.on_record, record)
 
     async def listen(self):
         return await asyncio.start_server(self.handle, '127.0.0.1', 0, limit=65536)

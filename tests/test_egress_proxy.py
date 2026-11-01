@@ -1,6 +1,7 @@
 """验证本机代理拒绝未认证和私网连接，并能透明转发 TLS 隧道字节。"""
 import asyncio
 import socket
+import time
 import unittest
 from unittest.mock import AsyncMock, patch
 from egress_proxy import ForwardProxy, public_connection
@@ -10,9 +11,10 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.records = []
         self.recorded = asyncio.Event()
+        self.loop = asyncio.get_running_loop()
         def record(item):
             self.records.append(item)
-            self.recorded.set()
+            self.loop.call_soon_threadsafe(self.recorded.set)
         self.proxy = ForwardProxy('fixture', 'secret', on_record=record)
         self.server = await self.proxy.listen()
         self.port = self.server.sockets[0].getsockname()[1]
@@ -95,6 +97,56 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.records[-1]['detail'], 'target_blacklisted')
                 connect.assert_not_called()
                 self.recorded.clear()
+
+    async def test_slow_record_persistence_does_not_delay_blacklist_failure(self):
+        first_finished = asyncio.Event()
+        original_record = self.proxy.on_record
+
+        def slow_record(item):
+            if item['domain'] == 'public.test':
+                time.sleep(1)
+                original_record(item)
+                self.loop.call_soon_threadsafe(first_finished.set)
+                return
+            original_record(item)
+
+        self.proxy.on_record = slow_record
+        async def connect(_host, _port):
+            return await asyncio.open_connection('127.0.0.1', echo_port)
+
+        async def echo(reader, writer):
+            await asyncio.sleep(0.01)
+            writer.close()
+            await writer.wait_closed()
+
+        echo_server = await asyncio.start_server(echo, '127.0.0.1', 0)
+        echo_port = echo_server.sockets[0].getsockname()[1]
+        try:
+            with patch('egress_proxy.public_connection', side_effect=connect):
+                first_reader, first_writer = await asyncio.open_connection('127.0.0.1', self.port)
+                first_writer.write(('CONNECT public.test:443 HTTP/1.1\r\nProxy-Authorization: '
+                                    + self.proxy.authorization + '\r\n\r\n').encode())
+                await first_writer.drain()
+                await asyncio.wait_for(first_reader.readuntil(b'\r\n\r\n'), 1)
+                first_writer.close()
+                await first_writer.wait_closed()
+
+                started = time.monotonic()
+                reader, writer = await asyncio.open_connection('127.0.0.1', self.port)
+                writer.write(('CONNECT www.google.com:443 HTTP/1.1\r\nProxy-Authorization: '
+                              + self.proxy.authorization + '\r\n\r\n').encode())
+                await writer.drain()
+                response = await asyncio.wait_for(reader.read(), 0.5)
+                elapsed = time.monotonic() - started
+                writer.close()
+                await writer.wait_closed()
+                self.assertIn(b'502', response)
+                self.assertLess(elapsed, 0.5)
+                await asyncio.wait_for(first_finished.wait(), 2)
+                await asyncio.sleep(0.05)
+        finally:
+            echo_server.close()
+            await echo_server.wait_closed()
 
     async def test_live_snapshot_includes_bytes_before_connection_finishes(self):
         release = asyncio.Event()
