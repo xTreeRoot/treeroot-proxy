@@ -79,7 +79,12 @@ def api(config, path, data, token=None):
     if token:
         headers['Authorization'] = 'Bearer ' + token
     request = urllib.request.Request(url, data=json.dumps(data).encode(), headers=headers, method='POST')
-    with urllib.request.urlopen(request, timeout=15, context=tls_context()) as response:
+    # 控制面心跳必须绕过 macOS/Windows 系统代理；本机代理异常不能让连接器失去在线状态。
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        urllib.request.HTTPSHandler(context=tls_context()),
+    )
+    with opener.open(request, timeout=15) as response:
         return json.load(response)
 
 
