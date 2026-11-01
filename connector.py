@@ -159,8 +159,11 @@ async def run(device_id):
                         records = await asyncio.to_thread(queue.batch)
                         payload = {'records': records, 'traffic': proxy.traffic_snapshot()}
                         result = await asyncio.to_thread(api, config, '/heartbeat', payload, config['agent_token'])
-                        if isinstance(result.get('blacklist'), list):
-                            proxy.set_blacklist(result['blacklist'])
+                        blacklist = result.get('blacklist')
+                        if isinstance(blacklist, list):
+                            set_blacklist = getattr(proxy, 'set_blacklist', None)
+                            if callable(set_blacklist):
+                                set_blacklist(blacklist)
                         await asyncio.to_thread(queue.acknowledge, result.get('accepted', []))
                     except urllib.error.HTTPError as error:
                         if error.code in (403, 404):
