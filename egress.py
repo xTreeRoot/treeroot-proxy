@@ -290,9 +290,12 @@ def install_routes(app, database, authenticated, config, data, root, report_data
             return [manager.summary(row) for row in db.execute('SELECT * FROM egress_devices WHERE deleted=? ORDER BY created,id', (deleted,))]
 
     @app.get('/api/egress/overview')
-    def overview(device_id: str = '', hours: int = 24, session=Depends(authenticated)):
-        if hours not in (24, 168):
+    def overview(device_id: str = '', hours: str = '24', session=Depends(authenticated)):
+        # A restored mobile select may send an empty value instead of omitting the query.
+        period = str(hours).strip() or '24'
+        if period not in ('24', '168'):
             raise HTTPException(422, '统计范围仅支持最近 24 小时或 7 天')
+        hours = int(period)
         now = int(time.time())
         since = now - hours * 3600
         where = " WHERE kind='request' AND ts>=? AND ts<=?"

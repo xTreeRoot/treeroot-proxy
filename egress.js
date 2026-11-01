@@ -10,6 +10,11 @@ const egressEventNames={created:'添加电脑',setup_downloaded:'下载连接器
 const egressRecordDetails={invalid_request:'请求格式无效',target_rejected:'目标地址或端口被拒绝',target_blacklisted:'目标主机在当前出口黑名单中',connection_failed:'网络连接失败',timeout:'连接超时',interrupted:'连接中断'};
 let egressOverviewController,egressOverviewData;
 const egressMetricIds=['total-traffic','day-traffic','enabled','connections'];
+function egressOverviewHours(){
+  const select=$('#egress-overview-hours');
+  if(!['24','168'].includes(select.value))select.value='24';
+  return select.value;
+}
 function egressSuccessRate(connections,succeeded){return connections?(succeeded/connections*100).toFixed(1)+'%':'—';}
 function renderEgressOverview(data){
   const options='<option value="">全部电脑</option>'+data.device_options.map(device=>`<option value="${esc(device.id)}">${esc(device.name)}${device.deleted?'（已删除）':''}</option>`).join('');
@@ -33,7 +38,7 @@ function renderEgressOverview(data){
 async function refreshEgressOverview(){
   egressOverviewController?.abort();
   const controller=new AbortController();egressOverviewController=controller;
-  const device=$('#egress-overview-device').value,hours=$('#egress-overview-hours').value;
+  const device=$('#egress-overview-device').value,hours=egressOverviewHours();
   const current=()=>!controller.signal.aborted&&state.page==='egress-dashboard'&&device===$('#egress-overview-device').value&&hours===$('#egress-overview-hours').value;
   const status=$('#egress-overview-status');
   status.textContent='正在更新出口统计…';status.classList.remove('error');
@@ -83,8 +88,9 @@ function openEgressOverviewRecords(deviceId){
   $('#egress-records-outcome').value='';$('#egress-records-search').value='';
   $('#egress-records-device').value=deviceId;
   $('#egress-records-kind').value='request';
-  $('#egress-records-hours').value=$('#egress-overview-hours').value;
-  egressRecordFilters={device_id:deviceId,kind:'request',start:egressOverviewData?.since||''};
+  $('#egress-records-hours').value=egressOverviewHours();
+  egressRecordFilters={device_id:deviceId,kind:'request'};
+  if(Number.isSafeInteger(egressOverviewData?.since))egressRecordFilters.start=egressOverviewData.since;
   state.pagination['egress-records'].page=1;state.pagination['egress-records'].anchor=null;
   page('egress-records');
 }

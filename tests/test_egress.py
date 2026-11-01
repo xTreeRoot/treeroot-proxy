@@ -197,8 +197,25 @@ class EgressTests(unittest.TestCase):
         self.assertTrue(all(point['upload'] == point['download'] == point['connections'] == 0 for point in empty['series']))
         self.assertEqual(self.client.get(path, params={'device_id': 'missing'}).status_code, 404)
         for value in (0, 1, 25, 169, 'invalid'):
-            self.assertEqual(self.client.get(path, params={'hours': value}).status_code, 422)
+            response = self.client.get(path, params={'hours': value})
+            self.assertEqual(response.status_code, 422)
+            self.assertEqual(response.json()['detail'], '统计范围仅支持最近 24 小时或 7 天')
         self.assertEqual(len(self.client.get(path, params={'hours': 168}).json()['series']), 168)
+
+    def test_overview_empty_mobile_period_defaults_without_bypassing_authentication(self):
+        path = '/api/egress/overview'
+        for value in ('', ' ', '\t', '24', ' 24 '):
+            with self.subTest(hours=value):
+                response = self.client.get(path, params={'hours': value})
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json()['hours'], 24)
+                self.assertEqual(len(response.json()['series']), 24)
+        week = self.client.get(path, params={'hours': ' 168 '})
+        self.assertEqual(week.status_code, 200)
+        self.assertEqual(week.json()['hours'], 168)
+        anonymous = TestClient(self.panel.app, base_url='https://testserver')
+        self.addCleanup(anonymous.close)
+        self.assertEqual(anonymous.get(path, params={'hours': ''}).status_code, 401)
 
     def test_cumulative_migration_retention_retry_and_restart_preserve_totals(self):
         device = self.create()
