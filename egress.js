@@ -153,6 +153,16 @@ async function refreshEgressBlacklist(){
   egressBlacklist=await api('/egress/blacklist');
   if(state.page==='egress')renderEgressBlacklist();
 }
+function setEgressBlacklistDialog(open){
+  document.body.classList.toggle('egress-dialog-open',open);
+}
+$('#egress-blacklist-open').addEventListener('click',async()=>{
+  await refreshEgressBlacklist();
+  $('#egress-blacklist-dialog').showModal();
+  setEgressBlacklistDialog(true);
+});
+$('#egress-blacklist-close').addEventListener('click',()=>$('#egress-blacklist-dialog').close());
+$('#egress-blacklist-dialog').addEventListener('close',()=>setEgressBlacklistDialog(false));
 async function refreshEgress(){
   const [devices,blacklist]=await Promise.all([api('/egress'+(egressTrash?'?deleted=true':'')),api('/egress/blacklist')]);
   egressDevices=devices;egressBlacklist=blacklist;
