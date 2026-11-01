@@ -22,6 +22,8 @@ FILES = ('app.py', 'app.js', 'index.html', 'style.css', 'echarts.min.js', 'backu
          'subscription-template.json', 'requirements.txt', 'requirements.lock',
          'egress.py', 'egress.js', 'egress.css', 'connector.py', 'connector_version.py',
          'egress_proxy.py')
+# 保留新增文件前生成的源码归档，旧包仍须通过逐文件清单和哈希校验。
+LEGACY_OPTIONAL_SOURCE_FILES = {'connector_version.py'}
 UNITS = ('xray.service', 'caddy.service', 'treeroot-panel.service',
          'treeroot-backup.service', 'treeroot-backup.timer')
 
@@ -226,7 +228,8 @@ def source_backups(directory):
             manifest = json.load(archive.extractfile('release-manifest.json'))
             if (manifest['version'] != item['version'] or manifest['commit'] != item['commit']
                     or set(manifest['files']) != set(names) - {'release-manifest.json'}
-                    or len(names) != len(set(names)) or not set(FILES).issubset(names)):
+                    or len(names) != len(set(names))
+                    or not (set(FILES) - LEGACY_OPTIONAL_SOURCE_FILES).issubset(names)):
                 raise ValueError('Source backup manifest mismatch')
             for name_in_archive, expected in manifest['files'].items():
                 if hashlib.sha256(archive.extractfile(name_in_archive).read()).hexdigest() != expected:
