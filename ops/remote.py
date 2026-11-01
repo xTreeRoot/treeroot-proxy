@@ -20,7 +20,8 @@ DATA = Path('/var/lib/treeroot')
 ARCHIVES = Path('/var/backups/treeroot')
 FILES = ('app.py', 'app.js', 'index.html', 'style.css', 'echarts.min.js', 'backup.py',
          'subscription-template.json', 'requirements.txt', 'requirements.lock',
-         'egress.py', 'egress.js', 'egress.css', 'connector.py', 'egress_proxy.py')
+         'egress.py', 'egress.js', 'egress.css', 'connector.py', 'connector_version.py',
+         'egress_proxy.py')
 UNITS = ('xray.service', 'caddy.service', 'treeroot-panel.service',
          'treeroot-backup.service', 'treeroot-backup.timer')
 

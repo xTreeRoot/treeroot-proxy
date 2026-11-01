@@ -17,6 +17,7 @@ import time
 import urllib.error
 import urllib.request
 
+from connector_version import CONNECTOR_VERSION
 from egress_proxy import ForwardProxy
 
 HOME = Path.home() / '.treeroot-connector'
@@ -105,7 +106,7 @@ def install(setup_path):
     paired = api(setup, '/pair', {'token': setup['token'], 'public_key': ' '.join(fields[:2])})
     save_private(folder / 'config.json', json.dumps(paired))
     save_private(folder / 'known_hosts', paired['known_hosts'] + '\n')
-    for name in ('connector.py', 'egress_proxy.py'):
+    for name in ('connector.py', 'connector_version.py', 'egress_proxy.py'):
         target = folder / name
         if Path(__file__).resolve().parent / name != target:
             shutil.copyfile(Path(__file__).resolve().parent / name, target)
@@ -157,7 +158,8 @@ async def run(device_id):
                     records = []
                     try:
                         records = await asyncio.to_thread(queue.batch)
-                        payload = {'records': records, 'traffic': proxy.traffic_snapshot()}
+                        payload = {'records': records, 'traffic': proxy.traffic_snapshot(),
+                                   'driver_version': CONNECTOR_VERSION}
                         result = await asyncio.to_thread(api, config, '/heartbeat', payload, config['agent_token'])
                         blacklist = result.get('blacklist')
                         if isinstance(blacklist, list):

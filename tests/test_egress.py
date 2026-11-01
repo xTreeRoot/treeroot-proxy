@@ -16,6 +16,14 @@ class EgressTests(unittest.TestCase):
     tearDownClass = classmethod(test_app.PanelTests.tearDownClass.__func__)
     setUp = test_app.PanelTests.setUp
 
+    def test_current_connector_version_is_authenticated_and_stable(self):
+        response = self.client.get('/api/egress/version')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'version': 'v2026.11.01.2'})
+        anonymous = TestClient(self.panel.app, base_url='https://testserver')
+        self.addCleanup(anonymous.close)
+        self.assertEqual(anonymous.get('/api/egress/version').status_code, 401)
+
     def create(self):
         return self.client.post('/api/egress', headers=self.headers, json={
             'name': 'My Mac', 'browser': {'platform': 'MacIntel', 'platformName': 'macOS',
@@ -27,7 +35,9 @@ class EgressTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
             setup = json.loads(archive.read('setup.json'))
-            self.assertEqual(set(archive.namelist()), {'setup.json', 'connector.py', 'egress_proxy.py', '使用说明.txt', '连接.command', '连接.cmd'})
+            self.assertEqual(set(archive.namelist()), {'setup.json', 'connector.py', 'connector_version.py',
+                                                       'egress_proxy.py', '使用说明.txt', '连接.command', '连接.cmd'})
+            self.assertEqual(json.loads(archive.read('setup.json'))['driver_version'], 'v2026.11.01.2')
         blob = b'\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20' + b'a' * 32
         body = {'token': setup['token'], 'public_key': 'ssh-ed25519 ' + base64.b64encode(blob).decode()}
         paired = self.client.post('/api/egress/' + device['id'] + '/pair', json=body)
@@ -57,8 +67,11 @@ class EgressTests(unittest.TestCase):
         self.assertEqual(self.client.post(path + '/pair', json=body).status_code, 403)
         self.assertEqual(self.client.post(path + '/heartbeat', json={}).status_code, 403)
         headers = {'Authorization': 'Bearer ' + paired['agent_token']}
-        self.assertEqual(self.client.post(path + '/heartbeat', headers=headers, json={}).status_code, 200)
-        self.assertTrue(self.client.get('/api/egress').json()[0]['online'])
+        self.assertEqual(self.client.post(path + '/heartbeat', headers=headers,
+                                          json={'driver_version': 'v2026.11.01.2'}).status_code, 200)
+        device_state = self.client.get('/api/egress').json()[0]
+        self.assertTrue(device_state['online'])
+        self.assertEqual(device_state['driver_version'], 'v2026.11.01.2')
         registry = json.loads((self.panel.egress_manager.directory / 'registry.json').read_text())
         self.assertEqual(registry['devices'][0]['proxy']['password'], paired['proxy_password'])
         self.assertEqual(registry['devices'][0]['port'], paired['remote_port'])

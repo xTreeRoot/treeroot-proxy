@@ -20,6 +20,7 @@ import zipfile
 
 from fastapi import Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
+from connector_version import CONNECTOR_VERSION
 
 
 class BrowserInfo(BaseModel):
@@ -82,6 +83,8 @@ class LiveTraffic(BaseModel):
 class HeartbeatEgress(BaseModel):
     records: list[ConnectionRecord] = Field(default_factory=list, max_length=100)
     traffic: LiveTraffic | None = None
+    driver_version: str | None = Field(default=None, max_length=32,
+                                       pattern=r'^v\d{4}\.\d{2}\.\d{2}\.\d+$')
 
 
 DEFAULT_BLACKLIST_HOSTS = (
@@ -126,9 +129,12 @@ class Egress:
               enabled INTEGER NOT NULL DEFAULT 1,deleted INTEGER NOT NULL DEFAULT 0,created INTEGER NOT NULL,
               browser TEXT NOT NULL,access_code TEXT NOT NULL,proxy_password TEXT NOT NULL,
               pair_hash TEXT,pair_expires INTEGER,public_key TEXT,agent_hash TEXT,
-              last_seen INTEGER,last_ip TEXT,last_test INTEGER)''')
-            if 'deleted' not in {row[1] for row in db.execute('PRAGMA table_info(egress_devices)')}:
+              last_seen INTEGER,last_ip TEXT,last_test INTEGER,driver_version TEXT)''')
+            device_columns = {row[1] for row in db.execute('PRAGMA table_info(egress_devices)')}
+            if 'deleted' not in device_columns:
                 db.execute('ALTER TABLE egress_devices ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0')
+            if 'driver_version' not in device_columns:
+                db.execute('ALTER TABLE egress_devices ADD COLUMN driver_version TEXT')
             db.execute('''CREATE TABLE IF NOT EXISTS egress_events(
               id INTEGER PRIMARY KEY AUTOINCREMENT,event_key TEXT NOT NULL,
               device_id TEXT NOT NULL REFERENCES egress_devices(id),ts INTEGER NOT NULL,
@@ -254,7 +260,7 @@ class Egress:
 
     def summary(self, row):
         online = bool(row['enabled'] and row['public_key'] and row['last_seen'] and time.time() - row['last_seen'] < 65)
-        return {key: row[key] for key in ('id', 'name', 'created', 'last_seen', 'last_ip', 'last_test')} | {
+        return {key: row[key] for key in ('id', 'name', 'created', 'last_seen', 'last_ip', 'last_test', 'driver_version')} | {
             'enabled': bool(row['enabled']), 'paired': bool(row['public_key']), 'online': online,
             'browser': json.loads(row['browser']),
         }
@@ -297,7 +303,7 @@ def install_routes(app, database, authenticated, config, data, root, report_data
         with report_database() as db:
             # Keep cards, charts and rankings on the same SQLite read snapshot.
             db.execute('BEGIN')
-            rows = db.execute('''SELECT id,name,deleted,enabled,public_key,last_seen
+            rows = db.execute('''SELECT id,name,deleted,enabled,public_key,last_seen,driver_version
                                  FROM egress_devices ORDER BY deleted,created,id''').fetchall()
             if device_id and not any(row['id'] == device_id for row in rows):
                 raise HTTPException(404, '出口设备不存在')
@@ -325,7 +331,7 @@ def install_routes(app, database, authenticated, config, data, root, report_data
         for row in rows:
             if device_id and row['id'] != device_id:
                 continue
-            item = {key: row[key] for key in ('id', 'name', 'last_seen')}
+            item = {key: row[key] for key in ('id', 'name', 'last_seen', 'driver_version')}
             item.update(deleted=bool(row['deleted']), enabled=bool(row['enabled']),
                         online=bool(not row['deleted'] and row['enabled'] and row['public_key']
                                     and row['last_seen'] and now - row['last_seen'] < 65))
@@ -502,7 +508,7 @@ def install_routes(app, database, authenticated, config, data, root, report_data
             row = manager.row(device_id, db)
             manager.event(db, row, 'deleted')
             db.execute("""UPDATE egress_devices SET deleted=1,enabled=0,public_key=NULL,
-                agent_hash=NULL,pair_hash=NULL,pair_expires=NULL,last_seen=NULL WHERE id=?""", (device_id,))
+                agent_hash=NULL,pair_hash=NULL,pair_expires=NULL,last_seen=NULL,driver_version=NULL WHERE id=?""", (device_id,))
         manager.publish()
         return {'ok': True}
 
@@ -535,11 +541,12 @@ def install_routes(app, database, authenticated, config, data, root, report_data
             manager.event(db, row, 'setup_downloaded')
         archive = io.BytesIO()
         with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as bundle:
-            for name in ('connector.py', 'egress_proxy.py'):
+            for name in ('connector.py', 'connector_version.py', 'egress_proxy.py'):
                 bundle.write(root / name, name)
             bundle.writestr('连接.command', '#!/bin/bash\ncd "$(dirname "$0")"\npython3 connector.py install --setup setup.json\nresult=$?\nif [ "$result" -ne 0 ]; then echo "连接失败，请查看上面的提示后重新下载连接包。"; fi\nread -r -p "按回车关闭窗口"\nexit "$result"\n')
             bundle.writestr('连接.cmd', '@echo off\r\ncd /d "%~dp0"\r\npy -3 connector.py install --setup setup.json\r\npause\r\n')
-            bundle.writestr('setup.json', json.dumps({'base_url': config['base_url'], 'id': device_id, 'token': token}))
+            bundle.writestr('setup.json', json.dumps({'base_url': config['base_url'], 'id': device_id,
+                                                       'token': token, 'driver_version': CONNECTOR_VERSION}))
             bundle.writestr('使用说明.txt', '请在本机解压，10 分钟内运行：\nmacOS：双击 连接.command\nWindows：双击 连接.cmd\n需要 Python 3.10+ 和 OpenSSH 客户端。安装后当前用户登录系统时自动连接。\n卸载：python3 connector.py uninstall --id ' + device_id + '\n')
             for name in ('连接.command',):
                 bundle.getinfo(name).external_attr = 0o100755 << 16
@@ -564,7 +571,8 @@ def install_routes(app, database, authenticated, config, data, root, report_data
             if not row['enabled'] or not row['pair_hash'] or row['pair_expires'] < time.time() or not hmac.compare_digest(row['pair_hash'], digest(body.token)):
                 raise HTTPException(403, '配对包已过期或已使用，请重新下载')
             db.execute('''UPDATE egress_devices SET public_key=?,agent_hash=?,pair_hash=NULL,
-                          pair_expires=NULL,last_seen=NULL WHERE id=?''', (' '.join(fields), digest(agent_token), device_id))
+                          pair_expires=NULL,last_seen=NULL,driver_version=NULL WHERE id=?''',
+                       (' '.join(fields), digest(agent_token), device_id))
             manager.event(db, row, 'paired')
             result = {'id': device_id, 'base_url': config['base_url'], 'ssh_host': config['egress_ssh_host'],
                       'ssh_port': 22, 'ssh_user': 'treeroot-egress', 'remote_port': row['port'],
@@ -591,13 +599,18 @@ def install_routes(app, database, authenticated, config, data, root, report_data
                         VALUES(?,?,?,'request','connection',?,?,?,?,?,?,?,?,?)''',
                         (record.event_key, device_id, record.ts, record.outcome, record.domain, record.port,
                          record.method, record.upload, record.download, record.duration_ms, row['last_ip'] or '', record.detail))
-            db.execute('UPDATE egress_devices SET last_seen=? WHERE id=?', (now, device_id))
+            db.execute('''UPDATE egress_devices SET last_seen=?,driver_version=COALESCE(?,driver_version)
+                          WHERE id=?''', (now, body.driver_version, device_id))
             manager.sync_totals(db, device_id)
             blacklist_hosts = [item['host'] for item in manager.blacklist(db, enabled_only=True)]
         manager.sample_traffic(device_id, body.traffic, now)
         manager.publish()
         return {'ok': True, 'accepted': [record.event_key for record in body.records],
                 'blacklist': blacklist_hosts}
+
+    @app.get('/api/egress/version')
+    def version(session=Depends(authenticated)):
+        return {'version': CONNECTOR_VERSION}
 
     @app.post('/api/egress/{device_id}/test')
     def test(device_id: str, session=Depends(authenticated)):

@@ -5,7 +5,7 @@
   <meta name="color-scheme" content="dark"><title>TreeRoot · 代理管理</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23111a29'/%3E%3Ctext x='11' y='45' font-family='sans-serif' font-size='40' font-weight='bold' fill='%235addc0'%3Etr%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="/assets/style.css?v=20261031-2">
-  <link rel="stylesheet" href="/assets/egress.css?v=20261101-2">
+  <link rel="stylesheet" href="/assets/egress.css?v=20261101-3">
   <script defer src="/assets/echarts.min.js?v=5.6.0"></script><script defer src="/assets/app.js?v=20261031-2"></script>
 </head>
 <body>
@@ -113,7 +113,7 @@
       </section>
       <section id="page-egress" class="page hidden">
         <article class="panel list-panel egress-panel">
-          <div class="panel-heading"><div><h2>电脑出口</h2><p class="muted">让服务器通过你的电脑访问平台，使用电脑所在网络的公网出口。</p></div><div class="egress-heading-actions"><button id="egress-blacklist-open" class="button subtle">黑名单管理</button><button id="egress-trash" class="button subtle">已删除设备</button><button id="add-egress" class="button primary">＋ 添加这台电脑</button></div></div>
+          <div class="panel-heading"><div><h2>电脑出口 <span id="egress-current-driver-version" class="tag">当前驱动版本：加载中</span></h2><p class="muted">让服务器通过你的电脑访问平台，使用电脑所在网络的公网出口。</p></div><div class="egress-heading-actions"><button id="egress-blacklist-open" class="button subtle">黑名单管理</button><button id="egress-trash" class="button subtle">已删除设备</button><button id="add-egress" class="button primary">＋ 添加这台电脑</button></div></div>
           <div class="egress-flow"><span>采集服务器</span><b>→</b><span>加密连接</span><b>→</b><span>你的电脑</span><b>→</b><span>平台网站</span></div>
           <div id="egress-devices" class="scroll-region egress-devices" aria-live="polite"></div>
           <div class="egress-foot muted">电脑需开机联网。连接中断时对应采集停止；此连接不会修改电脑的系统代理设置。</div>
@@ -143,5 +143,5 @@
 <div id="toast" role="status" aria-live="polite"></div>
 <dialog id="egress-blacklist-dialog" aria-labelledby="egress-blacklist-title"><div class="egress-blacklist-modal"><div class="modal-heading"><div><h2 id="egress-blacklist-title">出口黑名单</h2><p class="muted">精确主机名在电脑出口端快速失败，避免等待公网连接超时。</p></div><button id="egress-blacklist-close" class="icon-button" type="button" aria-label="关闭黑名单管理">×</button></div><div class="egress-blacklist-dialog-body"><div class="egress-blacklist-heading"><span id="egress-blacklist-status" class="tag">正在获取</span></div><form id="egress-blacklist-form" class="egress-blacklist-form"><label for="egress-blacklist-host">主机名<input id="egress-blacklist-host" maxlength="253" required placeholder="例如：www.google.com" autocomplete="off"></label><div class="egress-blacklist-form-actions"><button class="button primary" type="submit">添加规则</button><button id="egress-blacklist-cancel" class="button subtle" type="button" hidden>取消编辑</button></div></form><div id="egress-blacklist-list" class="egress-blacklist-list" aria-live="polite"><div class="empty">正在获取黑名单</div></div></div></div></dialog>
 <dialog id="egress-dialog"><form id="egress-form"><div class="modal-heading"><h2>添加这台电脑</h2><button class="icon-button close-dialog" type="button" aria-label="关闭">×</button></div><label for="egress-name">电脑名称</label><input id="egress-name" maxlength="64" required placeholder="例如：我的 Mac"><p id="egress-browser" class="muted"></p><p class="muted">添加后下载连接包，解压并双击其中的连接文件，首次安装后即可自动连接。浏览器设备信息会随电脑登记。</p><div class="modal-actions"><button class="button subtle close-dialog" type="button">取消</button><button class="button primary" type="submit">添加电脑</button></div></form></dialog>
-<script defer src="/assets/egress.js?v=20261101-2"></script>
+<script defer src="/assets/egress.js?v=20261101-3"></script>
 </body></html>
