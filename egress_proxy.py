@@ -3,6 +3,7 @@ import asyncio
 import base64
 import hmac
 import ipaddress
+import re
 import socket
 import time
 import uuid
@@ -50,12 +51,24 @@ async def public_connection(host, port):
 
 
 class ForwardProxy:
-    def __init__(self, username, password, on_record=None):
+    def __init__(self, username, password, on_record=None, blacklist=None):
         self.authorization = 'Basic ' + base64.b64encode((username + ':' + password).encode()).decode()
         self.slots = asyncio.Semaphore(64)
         self.on_record = on_record
         self.run_id = uuid.uuid4().hex
         self.traffic = {'upload': 0, 'download': 0}
+        self.blacklist = set(FAST_FAIL_HOSTS if blacklist is None else ())
+        if blacklist is not None:
+            self.set_blacklist(blacklist)
+
+    def set_blacklist(self, hosts):
+        """Replace the exact host rules received from the server after a heartbeat."""
+        valid = set()
+        for value in hosts:
+            host = str(value).strip().lower()
+            if len(host) <= 253 and re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+', host):
+                valid.add(host)
+        self.blacklist = valid
 
     def traffic_snapshot(self):
         return {'run_id': self.run_id, 'sampled_at': time.monotonic(), **self.traffic}
@@ -108,7 +121,7 @@ class ForwardProxy:
             if len(host) > 253 or any(char not in 'abcdefghijklmnopqrstuvwxyz0123456789.:%_-' for char in host):
                 raise ValueError('Invalid hostname')
             record.update(domain=host, port=port, detail='target_rejected')
-            if host in FAST_FAIL_HOSTS:
+            if host in self.blacklist:
                 record['detail'] = 'target_blacklisted'
                 raise ValueError('Target host is blacklisted')
             # 只限制目标建连并发；已建立的 TLS 隧道不再长期占用建连槽，

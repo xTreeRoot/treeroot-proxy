@@ -1,6 +1,8 @@
 'use strict';
 let egressDevices=[];
 let egressTrash=false;
+let egressBlacklist=[];
+let egressBlacklistEditing=null;
 let egressRecordRequest=0,egressRecordController,egressRecordDevicesLoadedAt=0;
 let egressRecordFilters={};
 const egressEventNames={created:'添加电脑',setup_downloaded:'下载连接器',paired:'完成配对',connected:'连接器上线',disconnected:'心跳中断',enabled:'启用出口',disabled:'停用出口',deleted:'删除电脑',restored:'恢复电脑',ip_test:'检测出口 IP',connection:'代理连接'};
@@ -138,13 +140,54 @@ async function browserDeviceInfo(){
   }
   return data;
 }
+function renderEgressBlacklist(){
+  const enabled=egressBlacklist.filter(item=>item.enabled).length;
+  $('#egress-blacklist-status').textContent=`${enabled} 条启用 · ${egressBlacklist.length} 条规则`;
+  $('#egress-blacklist-list').innerHTML=egressBlacklist.length?'<table><thead><tr><th>精确主机</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody>'+egressBlacklist.map(item=>`<tr><td class="mono">${esc(item.host)}</td><td>${badge(item.enabled)}</td><td class="mono">${date(item.updated)}</td><td><div class="egress-blacklist-actions"><button class="text-button" data-egress-blacklist-action="edit" data-egress-blacklist-id="${item.id}">编辑</button><button class="text-button" data-egress-blacklist-action="toggle" data-egress-blacklist-id="${item.id}">${item.enabled?'停用':'启用'}</button><button class="text-button danger-text" data-egress-blacklist-action="delete" data-egress-blacklist-id="${item.id}">删除</button></div></td></tr>`).join('')+'</tbody></table>':'<div class="empty">暂无黑名单规则</div>';
+}
+function resetEgressBlacklistEditor(){
+  egressBlacklistEditing=null;$('#egress-blacklist-host').value='';$('#egress-blacklist-cancel').hidden=true;
+  $('#egress-blacklist-form').querySelector('button[type="submit"]').textContent='添加规则';
+}
+async function refreshEgressBlacklist(){
+  egressBlacklist=await api('/egress/blacklist');
+  if(state.page==='egress')renderEgressBlacklist();
+}
 async function refreshEgress(){
-  egressDevices=await api('/egress'+(egressTrash?'?deleted=true':''));
+  const [devices,blacklist]=await Promise.all([api('/egress'+(egressTrash?'?deleted=true':'')),api('/egress/blacklist')]);
+  egressDevices=devices;egressBlacklist=blacklist;
   $('#egress-trash').textContent=egressTrash?'返回电脑出口':'已删除设备';
   $('#add-egress').hidden=egressTrash;
   if(state.page!=='egress')return;
+  renderEgressBlacklist();
   $('#egress-devices').innerHTML=egressDevices.length?egressDevices.map(device=>`<article class="egress-card"><div class="egress-card-head"><h3>${esc(device.name)}</h3><span class="badge ${device.online?'':'off'}"><i class="dot"></i>${device.online?'已连接':!device.enabled?'已停用':device.paired?'等待连接':'待安装'}</span></div><div class="egress-details"><span>设备<strong>${esc(device.browser.platformName||device.browser.platform||'待识别')} ${esc(device.browser.platformVersion)}</strong></span><span>出口 IP<strong>${esc(device.last_ip||'待检测')}</strong></span><span>最近在线<strong>${date(device.last_seen)}</strong></span></div><div class="egress-actions">${egressTrash?`<button class="button subtle" data-egress-action="restore" data-egress-id="${device.id}">恢复设备</button>`:`<button class="button subtle" data-egress-action="setup" data-egress-id="${device.id}" ${!device.enabled?'disabled':''}>${device.paired?'重新安装连接器':'一键连接'}</button><button class="button subtle" data-egress-action="test" data-egress-id="${device.id}" ${!device.online?'disabled':''}>检测出口 IP</button><button class="button subtle" data-egress-action="code" data-egress-id="${device.id}">复制应用连接码</button><button class="button ${device.enabled?'subtle':'primary'}" data-egress-action="toggle" data-egress-id="${device.id}">${device.enabled?'停用':'启用并自动连接'}</button><button class="button danger" data-egress-action="delete" data-egress-id="${device.id}">删除</button>`}</div><p class="egress-test">${device.online?'已连接。可将应用连接码绑定到采集账号。':device.paired?'连接器会自动重连；请保持电脑开机联网。':'首次连接：下载后解压，macOS 双击“连接.command”，Windows 双击“连接.cmd”；安装完成后开机自动加密连接。'}</p></article>`).join(''):'<div class="egress-empty">还没有电脑出口<br>添加这台电脑，完成一次安装后即可自动连接。</div>';
 }
+$('#egress-blacklist-form').addEventListener('submit',event=>{
+  event.preventDefault();busy(event.submitter,async()=>{
+    const host=$('#egress-blacklist-host').value.trim();
+    if(egressBlacklistEditing){
+      await api('/egress/blacklist/'+egressBlacklistEditing,{method:'PATCH',body:JSON.stringify({host})});toast('黑名单规则已更新');
+    }else{
+      await api('/egress/blacklist',{method:'POST',body:JSON.stringify({host})});toast('黑名单规则已添加');
+    }
+    resetEgressBlacklistEditor();await refreshEgress();
+  });
+});
+$('#egress-blacklist-cancel').addEventListener('click',resetEgressBlacklistEditor);
+document.addEventListener('click',event=>{
+  const button=event.target.closest('[data-egress-blacklist-action]');if(!button)return;
+  const item=egressBlacklist.find(entry=>String(entry.id)===button.dataset.egressBlacklistId);if(!item)return;
+  busy(button,async()=>{
+    const action=button.dataset.egressBlacklistAction;
+    if(action==='edit'){
+      egressBlacklistEditing=item.id;$('#egress-blacklist-host').value=item.host;$('#egress-blacklist-cancel').hidden=false;
+      $('#egress-blacklist-form').querySelector('button[type="submit"]').textContent='保存修改';$('#egress-blacklist-host').focus();return;
+    }
+    if(action==='toggle')await api('/egress/blacklist/'+item.id,{method:'PATCH',body:JSON.stringify({enabled:!item.enabled})});
+    if(action==='delete')await api('/egress/blacklist/'+item.id,{method:'DELETE',body:'{}'});
+    await refreshEgress();toast(action==='delete'?'黑名单规则已删除':'黑名单规则状态已更新');
+  });
+});
 $('#egress-trash').addEventListener('click',async()=>{egressTrash=!egressTrash;await refreshEgress();});
 $('#add-egress').addEventListener('click',async()=>{
   const device=await browserDeviceInfo();

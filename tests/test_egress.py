@@ -67,6 +67,36 @@ class EgressTests(unittest.TestCase):
         self.assertFalse(self.client.get('/api/egress').json()[0]['online'])
         self.assertFalse(json.loads((self.panel.egress_manager.directory / 'registry.json').read_text())['devices'][0]['enabled'])
 
+    def test_blacklist_crud_and_heartbeat_sync(self):
+        initial = self.client.get('/api/egress/blacklist').json()
+        self.assertEqual({item['host'] for item in initial}, {
+            'accounts.google.com', 'www.google.com', 'content-autofill.googleapis.com'})
+        self.assertTrue(all(item['enabled'] for item in initial))
+        created = self.client.post('/api/egress/blacklist', headers=self.headers,
+                                   json={'host': ' Blocked.Example.com '})
+        self.assertEqual(created.status_code, 200)
+        rule = created.json()
+        self.assertEqual(rule['host'], 'blocked.example.com')
+        self.assertEqual(self.client.post('/api/egress/blacklist', headers=self.headers,
+                                          json={'host': 'blocked.example.com'}).status_code, 409)
+        for host in ('*.example.com', 'https://example.com', 'example.com:443', '127.0.0.1'):
+            self.assertEqual(self.client.post('/api/egress/blacklist', headers=self.headers,
+                                              json={'host': host}).status_code, 422)
+        device = self.create()
+        _, paired = self.pair(device)
+        heartbeat = '/api/egress/' + device['id'] + '/heartbeat'
+        agent_headers = {'Authorization': 'Bearer ' + paired['agent_token']}
+        response = self.client.post(heartbeat, headers=agent_headers, json={})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('blocked.example.com', response.json()['blacklist'])
+        self.client.patch('/api/egress/blacklist/' + str(rule['id']), headers=self.headers,
+                          json={'host': 'renamed.example.com', 'enabled': False})
+        response = self.client.post(heartbeat, headers=agent_headers, json={})
+        self.assertNotIn('renamed.example.com', response.json()['blacklist'])
+        self.assertNotIn('blocked.example.com', response.json()['blacklist'])
+        self.client.request('DELETE', '/api/egress/blacklist/' + str(rule['id']), headers=self.headers, json={})
+        self.assertNotIn('renamed.example.com', {item['host'] for item in self.client.get('/api/egress/blacklist').json()})
+
     def test_expiry_and_bad_keys_are_rejected(self):
         device = self.create()
         body, _ = self.pair(device)

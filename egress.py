@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import secrets
 import socket
+import sqlite3
 import subprocess
 import threading
 import time
@@ -49,6 +50,15 @@ class UpdateEgress(BaseModel):
     enabled: bool
 
 
+class NewBlacklistHost(BaseModel):
+    host: str = Field(min_length=1, max_length=253)
+
+
+class UpdateBlacklistHost(BaseModel):
+    host: str | None = Field(default=None, min_length=1, max_length=253)
+    enabled: bool | None = None
+
+
 class ConnectionRecord(BaseModel):
     event_key: str = Field(pattern=r'^[a-f0-9]{32}$')
     ts: int = Field(ge=0)
@@ -59,7 +69,7 @@ class ConnectionRecord(BaseModel):
     upload: int = Field(default=0, ge=0, le=2**53 - 1)
     download: int = Field(default=0, ge=0, le=2**53 - 1)
     duration_ms: int = Field(default=0, ge=0, le=2**53 - 1)
-    detail: Literal['', 'invalid_request', 'target_rejected', 'connection_failed', 'timeout', 'interrupted'] = ''
+    detail: Literal['', 'invalid_request', 'target_rejected', 'target_blacklisted', 'connection_failed', 'timeout', 'interrupted'] = ''
 
 
 class LiveTraffic(BaseModel):
@@ -72,6 +82,27 @@ class LiveTraffic(BaseModel):
 class HeartbeatEgress(BaseModel):
     records: list[ConnectionRecord] = Field(default_factory=list, max_length=100)
     traffic: LiveTraffic | None = None
+
+
+DEFAULT_BLACKLIST_HOSTS = (
+    'accounts.google.com',
+    'www.google.com',
+    'content-autofill.googleapis.com',
+)
+HOST_LABEL = r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'
+HOST_PATTERN = re.compile(r'^(?:' + HOST_LABEL + r'\.)*' + HOST_LABEL + r'$')
+
+
+def normalize_blacklist_host(value: str) -> str:
+    host = value.strip().lower()
+    try:
+        ipaddress.ip_address(host)
+        is_ip = True
+    except ValueError:
+        is_ip = False
+    if is_ip or len(host) > 253 or not HOST_PATTERN.fullmatch(host):
+        raise HTTPException(422, '黑名单只接受精确主机名，不支持协议、端口、路径、通配符或 IP')
+    return host
 
 
 def digest(value):
@@ -112,6 +143,15 @@ class Egress:
                 device_id TEXT PRIMARY KEY REFERENCES egress_devices(id),
                 upload INTEGER NOT NULL,download INTEGER NOT NULL,connections INTEGER NOT NULL,
                 last_event_id INTEGER NOT NULL,since INTEGER NOT NULL)''')
+            db.execute('''CREATE TABLE IF NOT EXISTS egress_blacklist(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                host TEXT NOT NULL UNIQUE,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created INTEGER NOT NULL,
+                updated INTEGER NOT NULL)''')
+            now = int(time.time())
+            db.executemany('''INSERT OR IGNORE INTO egress_blacklist(host,enabled,created,updated)
+                              VALUES(?,?,?,?)''', [(host, 1, now, now) for host in DEFAULT_BLACKLIST_HOSTS])
             self.sync_totals(db)
         with self.rate_lock:
             self.live.clear()
@@ -225,6 +265,14 @@ class Egress:
         if not row['enabled'] or not row['agent_hash'] or not hmac.compare_digest(row['agent_hash'], digest(token)):
             raise HTTPException(403, '出口连接已停用或凭据无效')
         return row
+
+    def blacklist(self, db, enabled_only=False):
+        query = 'SELECT id,host,enabled,created,updated FROM egress_blacklist'
+        if enabled_only:
+            query += ' WHERE enabled=1'
+        query += ' ORDER BY host,id'
+        return [dict(row) | {'enabled': bool(row['enabled'])}
+                for row in db.execute(query).fetchall()]
 
 
 def install_routes(app, database, authenticated, config, data, root, report_database):
@@ -347,6 +395,62 @@ def install_routes(app, database, authenticated, config, data, root, report_data
             item.pop('event_key')
         return {'items': items, 'total': total, 'page': page, 'page_size': page_size,
                 'pages': pages, 'before_id': before_id}
+
+    @app.get('/api/egress/blacklist')
+    def blacklist(session=Depends(authenticated)):
+        with database(readonly=True) as db:
+            return manager.blacklist(db)
+
+    @app.post('/api/egress/blacklist')
+    def create_blacklist(body: NewBlacklistHost, session=Depends(authenticated)):
+        host = normalize_blacklist_host(body.host)
+        now = int(time.time())
+        try:
+            with database() as db:
+                cursor = db.execute('''INSERT INTO egress_blacklist(host,enabled,created,updated)
+                                      VALUES(?,?,?,?)''', (host, 1, now, now))
+                result = dict(db.execute('''SELECT id,host,enabled,created,updated
+                                            FROM egress_blacklist WHERE id=?''', (cursor.lastrowid,)).fetchone())
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, '该主机已在出口黑名单中')
+        result['enabled'] = bool(result['enabled'])
+        return result
+
+    @app.patch('/api/egress/blacklist/{blacklist_id}')
+    def update_blacklist(blacklist_id: int, body: UpdateBlacklistHost, session=Depends(authenticated)):
+        host = normalize_blacklist_host(body.host) if body.host is not None else None
+        if host is None and body.enabled is None:
+            raise HTTPException(422, '至少提供主机名或启用状态')
+        now = int(time.time())
+        try:
+            with database() as db:
+                current = db.execute('SELECT * FROM egress_blacklist WHERE id=?', (blacklist_id,)).fetchone()
+                if not current:
+                    raise HTTPException(404, '出口黑名单规则不存在')
+                fields, values = [], []
+                if host is not None:
+                    fields.append('host=?')
+                    values.append(host)
+                if body.enabled is not None:
+                    fields.append('enabled=?')
+                    values.append(body.enabled)
+                fields.append('updated=?')
+                values.extend([now, blacklist_id])
+                db.execute('UPDATE egress_blacklist SET ' + ','.join(fields) + ' WHERE id=?', values)
+                result = dict(db.execute('''SELECT id,host,enabled,created,updated
+                                            FROM egress_blacklist WHERE id=?''', (blacklist_id,)).fetchone())
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, '该主机已在出口黑名单中')
+        result['enabled'] = bool(result['enabled'])
+        return result
+
+    @app.delete('/api/egress/blacklist/{blacklist_id}')
+    def delete_blacklist(blacklist_id: int, session=Depends(authenticated)):
+        with database() as db:
+            result = db.execute('DELETE FROM egress_blacklist WHERE id=?', (blacklist_id,))
+            if not result.rowcount:
+                raise HTTPException(404, '出口黑名单规则不存在')
+        return {'ok': True}
 
     @app.post('/api/egress')
     def create(body: NewEgress, session=Depends(authenticated)):
@@ -489,9 +593,11 @@ def install_routes(app, database, authenticated, config, data, root, report_data
                          record.method, record.upload, record.download, record.duration_ms, row['last_ip'] or '', record.detail))
             db.execute('UPDATE egress_devices SET last_seen=? WHERE id=?', (now, device_id))
             manager.sync_totals(db, device_id)
+            blacklist_hosts = [item['host'] for item in manager.blacklist(db, enabled_only=True)]
         manager.sample_traffic(device_id, body.traffic, now)
         manager.publish()
-        return {'ok': True, 'accepted': [record.event_key for record in body.records]}
+        return {'ok': True, 'accepted': [record.event_key for record in body.records],
+                'blacklist': blacklist_hosts}
 
     @app.post('/api/egress/{device_id}/test')
     def test(device_id: str, session=Depends(authenticated)):
