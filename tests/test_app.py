@@ -282,10 +282,13 @@ class PanelTests(unittest.TestCase):
 
     def test_server_information_is_authenticated_cached_and_uses_real_system_fields(self):
         proc = {'/proc/cpuinfo': 'model name : Fixture CPU\n',
-                '/proc/net/dev': 'header\nheader\n lo: 1 0 0 0 0 0 0 0 2\n ens17: 100 0 0 0 0 0 0 0 200\n'}
+                }
         output = ('Id=xray.service\nActiveState=active\nSubState=running\nMainPID=123\n'
                   'MemoryCurrent=2048\nActiveEnterTimestamp=Sat 2026-10-31 00:00:00 UTC\n\n'
-                  'Id=treeroot-backup.timer\nActiveState=active\nSubState=waiting\nMainPID=0\nMemoryCurrent=[not set]\n')
+                  'Id=treeroot-backup.timer\nActiveState=active\nSubState=waiting\nMainPID=0\nMemoryCurrent=[not set]\n\n'
+                  'Id=socialcrawlerhub.service\nDescription=SocialCrawlerHub HTTP service\n'
+                  'ActiveState=active\nSubState=running\nMainPID=456\nMemoryCurrent=4096\n'
+                  'WorkingDirectory=/opt/SocialCrawlerHub\n')
         with patch.object(self.panel.platform, 'uname', return_value=Mock(node='fixture-host', release='fixture-kernel', machine='x86_64', system='Linux')), \
              patch.object(self.panel.platform, 'freedesktop_os_release', return_value={'PRETTY_NAME': 'Fixture Linux'}), \
              patch.object(self.panel.Path, 'read_text', autospec=True, side_effect=lambda path, *a, **k: proc[str(path)]), \
@@ -296,11 +299,16 @@ class PanelTests(unittest.TestCase):
             data = first.json()
             self.assertEqual((data['hostname'], data['os'], data['cpu_model'], data['processes']),
                              ('fixture-host', 'Fixture Linux', 'Fixture CPU', 2))
-            self.assertEqual(data['interfaces'], [{'name': 'ens17', 'received': 100, 'sent': 200}])
+            self.assertNotIn('interfaces', data)
             self.assertEqual((data['services'][0]['pid'], data['services'][0]['memory']), (123, 2048))
             self.assertIsNone(data['services'][1]['memory'])
+            self.assertEqual((data['services'][2]['description'], data['services'][2]['working_directory']),
+                             ('SocialCrawlerHub HTTP service', '/opt/SocialCrawlerHub'))
             self.assertEqual(self.client.get('/api/server').json(), data)
             self.assertEqual(run.call_count, 1)
+            self.assertIn('socialcrawlerhub.service', run.call_args.args[0])
+            self.assertIn('socialcrawlerhub-browser.service', run.call_args.args[0])
+            self.assertIn('mysql.service', run.call_args.args[0])
             for secret in ('admin_password_hash', 'initial_uuid', 'initial_token', 'ws_path'):
                 self.assertNotIn(secret, data)
         self.client.cookies.clear()

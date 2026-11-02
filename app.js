@@ -97,11 +97,11 @@ async function refreshServerInformation(){
   if(state.page!=='overview')return;
   try{
     const data=await api('/server');if(state.page!=='overview')return;
-    const fields=[['主机名',data.hostname],['操作系统',data.os],['内核版本',data.kernel],['系统架构',data.architecture],['CPU 型号',data.cpu_model],['服务器时区',data.timezone],['网站域名',data.domain],['代理协议',data.protocol],['Python 版本',data.python],['FastAPI / uvicorn',[data.versions.fastapi,data.versions.uvicorn].filter(Boolean).join(' / ')],['系统进程数',data.processes],['数据库大小',data.database_bytes==null?null:bytes(data.database_bytes)]];
+    const crawlerhub=data.services.find(item=>item.name==='socialcrawlerhub.service');
+    const fields=[['主机名',data.hostname],['操作系统',data.os],['内核版本',data.kernel],['系统架构',data.architecture],['CPU 型号',data.cpu_model],['服务器时区',data.timezone],['网站域名',data.domain],['代理协议',data.protocol],['SocialCrawlerHub 网站','https://get.treeroot.top'],['SocialCrawlerHub 目录',crawlerhub?.working_directory],['Python 版本',data.python],['FastAPI / uvicorn',[data.versions.fastapi,data.versions.uvicorn].filter(Boolean).join(' / ')],['系统进程数',data.processes],['数据库大小',data.database_bytes==null?null:bytes(data.database_bytes)]];
     $('#server-details').innerHTML=fields.map(([name,value])=>`<div class="server-detail"><span>${esc(name)}</span><strong>${esc(value??'暂不可用')}</strong></div>`).join('');
-    const names={'xray.service':'Xray 代理','caddy.service':'Caddy HTTPS','treeroot-panel.service':'TreeRoot 面板','treeroot-backup.timer':'每日备份定时器'};
+    const names={'xray.service':'Xray 代理','caddy.service':'Caddy HTTPS','treeroot-panel.service':'TreeRoot 面板','treeroot-backup.timer':'每日备份定时器','socialcrawlerhub.service':'SocialCrawlerHub 网站服务','socialcrawlerhub-browser.service':'SocialCrawlerHub 浏览器服务','mysql.service':'MySQL 数据库'};
     $('#server-services').innerHTML=data.services.length?'<table><thead><tr><th>服务</th><th>状态</th><th>进程</th><th>内存</th></tr></thead><tbody>'+data.services.map(item=>`<tr><td>${esc(names[item.name]||item.name)}<small class="service-start">${esc(item.started_at||'')}</small></td><td><span class="badge ${item.state==='active'?'':'off'}"><i class="dot"></i>${item.state==='active'?'运行中':esc(item.state||'未知')}</span></td><td class="mono">${item.pid||'—'}</td><td class="mono">${item.memory==null?'—':bytes(item.memory)}</td></tr>`).join('')+'</tbody></table>':'<div class="empty">暂时无法读取服务状态</div>';
-    $('#server-network').innerHTML=data.interfaces.length?'<table><thead><tr><th>网卡</th><th>累计接收</th><th>累计发送</th></tr></thead><tbody>'+data.interfaces.map(item=>`<tr><td class="mono">${esc(item.name)}</td><td class="mono">${bytes(item.received)}</td><td class="mono">${bytes(item.sent)}</td></tr>`).join('')+'</tbody></table>':'<div class="empty">暂时无法读取网卡信息</div>';
   }catch(error){if(state.page==='overview')$('#server-details').innerHTML='<div class="empty">服务器信息读取失败，将自动重试</div>';}
 }
 async function renderActivity(){

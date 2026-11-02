@@ -92,6 +92,8 @@ aliyun alidns DescribeDomainRecordInfo --profile treeroot-dns --RecordId 2116072
 
 `xray.service` 的 Description 仍是历史文字“Personal VLESS REALITY proxy”，实际运行的是 VMess WS。判断协议应看真实配置和订阅。
 
+同机还运行独立的 SocialCrawlerHub 项目：Caddy 的 `get.treeroot.top` 站点反向代理到 `127.0.0.1:3789`；当前发布目录由 `/opt/SocialCrawlerHub` 链接到 `/opt/socialcrawlerhub/releases/` 下的版本目录。项目服务为 `socialcrawlerhub.service` 和 `socialcrawlerhub-browser.service`，数据库为 `mysql.service`。TreeRoot 面板仅读取这些单元的运行状态及 systemd 工作目录，不发布 SocialCrawlerHub 应用代码或配置。
+
 ## SSH 和私密资料
 
 已核验的 ED25519 主机指纹：
