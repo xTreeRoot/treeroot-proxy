@@ -4,9 +4,9 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark"><title>TreeRoot · 代理管理</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23111a29'/%3E%3Ctext x='11' y='45' font-family='sans-serif' font-size='40' font-weight='bold' fill='%235addc0'%3Etr%3C/text%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/assets/style.css?v=20261109-1">
+  <link rel="stylesheet" href="/assets/style.css?v=20261109-2">
   <link rel="stylesheet" href="/assets/egress.css?v=20261101-3">
-  <script defer src="/assets/echarts.min.js?v=5.6.0"></script><script defer src="/assets/app.js?v=20261109-1"></script>
+  <script defer src="/assets/echarts.min.js?v=5.6.0"></script><script defer src="/assets/app.js?v=20261109-2"></script>
 </head>
 <body>
 <div id="login" class="login-screen">
@@ -137,6 +137,7 @@
   </main>
 </div>
 <dialog id="user-dialog"><form id="user-form"><div class="modal-heading"><h2 id="user-modal-title">新增用户</h2><button class="icon-button close-dialog" type="button" aria-label="关闭">×</button></div><label for="user-name">用户名称</label><input id="user-name" maxlength="64" required placeholder="用户名称"><div class="modal-actions"><button type="button" class="button subtle close-dialog">取消</button><button type="submit" class="button primary">保存用户</button></div></form></dialog>
+<dialog id="limits-dialog" aria-labelledby="limits-title"><form id="limits-form"><div class="modal-heading"><h2 id="limits-title">流量限制</h2><button class="icon-button close-dialog" type="button" aria-label="关闭">×</button></div><div class="limits-usage"><div><span>累计已使用</span><b id="limits-total-used">—</b></div><div><span>今日已使用</span><b id="limits-daily-used">—</b></div></div><label for="limit-total_bytes">总流量上限（GB）</label><input id="limit-total_bytes" type="number" inputmode="decimal" min="0" step="any" max="8388607" placeholder="不限"><p class="limits-help muted">上传和下载合计，包含已有累计流量；额度用尽后暂停。</p><label for="limit-daily_bytes">单日流量上限（GB）</label><input id="limit-daily_bytes" type="number" inputmode="decimal" min="0" step="any" max="8388607" placeholder="不限"><p class="limits-help muted">按北京时间每天 00:00 重置，达到上限后当天暂停。</p><label for="limit-speed_bps">网速上限（Mbps）</label><input id="limit-speed_bps" type="number" inputmode="decimal" min="0" step="any" max="1000000" placeholder="不限"><p class="limits-help muted">所有设备、所有连接共享上传和下载的合计网速。1 Mbps 约为 125 KB/s。</p><p class="limits-help muted">留空或 0 表示不限；1 GB = 1024³ 字节。</p><p id="limits-status" class="limits-help muted" role="status"></p><div class="modal-actions limits-actions"><button id="limits-clear" class="text-button" type="button">清除全部上限</button><button class="button subtle close-dialog" type="button">取消</button><button class="button primary" type="submit">保存限制</button></div></form></dialog>
 <dialog id="subscription-dialog"><div class="modal-heading"><h2 id="subscription-title">订阅链接</h2><button class="icon-button close-dialog" aria-label="关闭">×</button></div><label for="clash-link">Clash</label><textarea id="clash-link" readonly rows="3"></textarea><button id="copy-clash" class="button subtle full">复制 Clash 订阅</button><label for="rocket-link">Shadowrocket · 小火箭</label><textarea id="rocket-link" readonly rows="3"></textarea><button id="copy-rocket" class="button subtle full">复制小火箭订阅</button></dialog>
 <dialog id="confirm-dialog"><div class="modal-heading"><h2 id="confirm-title">重置订阅</h2><button class="icon-button close-dialog" aria-label="关闭">×</button></div><p id="confirm-description" class="muted"></p><div class="modal-actions"><button class="button subtle close-dialog">取消</button><button id="confirm-action" class="button danger">确认重置</button></div></dialog>
 <div id="toast" role="status" aria-live="polite"></div>

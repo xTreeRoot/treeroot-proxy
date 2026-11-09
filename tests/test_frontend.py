@@ -16,7 +16,8 @@ const element = selector => {
   if (!elements.has(selector)) elements.set(selector, {
     value: '', innerHTML: '', textContent: '', clientWidth: 390, listeners: new Map(),
     classList: {add() {}, remove() {}, toggle() {}},
-    addEventListener(name, handler) {this.listeners.set(name, handler);}, setAttribute() {}
+    addEventListener(name, handler) {this.listeners.set(name, handler);}, setAttribute() {},
+    showModal() {this.open=true;}, close() {this.open=false;}
   });
   return elements.get(selector);
 };
@@ -67,6 +68,24 @@ assert.equal(option.xAxis.axisLabel.formatter('1793462400'), '11月');
 run("renderTraffic([{ts:1793462400,upload:1,download:2}],'traffic-chart',24,'day')");
 assert.equal(option.xAxis.axisLabel.formatter('1793462400'), '11/01');
 (async () => {
+  run(`let saved=[]; api=async(path,options)=>{saved.push({path,options});return {
+    total_bytes:1610612736,daily_bytes:1073741824,speed_bps:500000,
+    total_used:200,daily_used:100,blocked:null,ready:true};};`);
+  await run("openUserLimits({id:7,name:'Fixture'}, {})");
+  assert.equal(element('#limit-total_bytes').value, 1.5);
+  assert.equal(element('#limit-speed_bps').value, .5);
+  assert.equal(element('#limits-dialog').open, true);
+  element('#limits-clear').listeners.get('click')();
+  assert.equal(element('#limit-daily_bytes').value, '');
+  element('#limit-total_bytes').value = '2.5';
+  element('#limit-daily_bytes').value = '1';
+  element('#limit-speed_bps').value = '.8';
+  run('refresh=async()=>{};toast=()=>{};');
+  element('#limits-form').listeners.get('submit')({preventDefault(){},submitter:{}});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(run('saved.at(-1).path'), '/users/7/limits');
+  assert.equal(run('saved.at(-1).options.body'), JSON.stringify({total_bytes:2684354560,daily_bytes:1073741824,speed_bps:800000}));
+  vm.runInContext(fs.readFileSync(process.argv[1], 'utf8').match(/async function refresh\(\)\{[\s\S]*?\n\}/)[0], context);
   run(`state.csrf='fixture';state.refreshing=false;state.pending=false;
     let resolveFirst, requestCount=0, rendered=[];
     loadUsers=async()=>{}; renderUsers=()=>{}; renderOverview=data=>rendered.push(data.marker);

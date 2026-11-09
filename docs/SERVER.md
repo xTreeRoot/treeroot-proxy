@@ -31,7 +31,8 @@
 | TCP 80 | 公网 | Caddy HTTPS 跳转及 ACME HTTP 验证 |
 | TCP 443 | 公网 | Caddy HTTPS：管理网站、订阅、WebSocket 代理 |
 | TCP 10001 | `127.0.0.1` | Xray VMess WebSocket 入站 |
-| TCP 10085 | `127.0.0.1` | Xray Handler/Stats/Logger gRPC API |
+| TCP/UDP 10002 | `127.0.0.1` | TreeRoot 账号限流中继；UDP 关联使用本机临时端口 |
+| TCP 10085 | `127.0.0.1` | Xray Handler/Stats/Logger/Routing gRPC API |
 | TCP 19991 | `127.0.0.1` | uvicorn / FastAPI |
 | TCP 2019 | `127.0.0.1` | Caddy 本机管理接口 |
 
@@ -86,6 +87,7 @@ aliyun alidns DescribeDomainRecordInfo --profile treeroot-dns --RecordId 2116072
 | --- | --- | --- |
 | `xray.service` | `xray:xray` | `/usr/local/bin/xray run -config /usr/local/etc/xray/config.json` |
 | `caddy.service` | `caddy:caddy` | `/usr/local/bin/caddy run --config /etc/caddy/Caddyfile` |
+| `treeroot-limits.service` | `treeroot:treeroot` | venv 中 `limits.py`，监听 `127.0.0.1:10002`，共享账号额度与带宽 |
 | `treeroot-panel.service` | `treeroot:treeroot`，附加组 xray | venv 中 uvicorn，监听 `127.0.0.1:19991` |
 | `treeroot-backup.service` | `treeroot:treeroot` | 运行 `/opt/treeroot/backup.py` |
 | `treeroot-backup.timer` | systemd | 每日 UTC 00:00 后随机延迟最多 300 秒，约北京时间 08:00–08:05；错过后补跑 |

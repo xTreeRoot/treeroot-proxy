@@ -18,7 +18,7 @@ VERSION = re.compile(r'v(\d{4})\.(\d{2})\.(\d{2})\.(\d+)')
 TOP_LEVEL = set(FILES) | {'AGENTS.md', 'README.md', '.gitignore'}
 SOURCE_DIRS = {'ops', 'docs', 'tests', 'deploy'}
 # 连接器版本模块是本次新增文件；保留旧源码包时允许它暂时缺失。
-LEGACY_OPTIONAL_FILES = {'connector_version.py'}
+LEGACY_OPTIONAL_FILES = {'connector_version.py', 'limits.py'}
 
 
 def git(*args):

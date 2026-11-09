@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import sqlite3
 import subprocess
 import tarfile
@@ -21,11 +22,11 @@ ARCHIVES = Path('/var/backups/treeroot')
 FILES = ('app.py', 'app.js', 'index.html', 'style.css', 'echarts.min.js', 'backup.py',
          'subscription-template.json', 'requirements.txt', 'requirements.lock',
          'egress.py', 'egress.js', 'egress.css', 'connector.py', 'connector_version.py',
-         'egress_proxy.py')
+         'egress_proxy.py', 'limits.py')
 # 保留新增文件前生成的源码归档，旧包仍须通过逐文件清单和哈希校验。
-LEGACY_OPTIONAL_SOURCE_FILES = {'connector_version.py'}
+LEGACY_OPTIONAL_SOURCE_FILES = {'connector_version.py', 'limits.py'}
 UNITS = ('xray.service', 'caddy.service', 'treeroot-panel.service',
-         'treeroot-backup.service', 'treeroot-backup.timer')
+         'treeroot-backup.service', 'treeroot-backup.timer', 'treeroot-limits.service')
 
 
 def run(*args, **kwargs):
@@ -60,6 +61,8 @@ def backup(public_ip, stop_services=False):
     if not stop_services:
         return create_backup(public_ip, False)
     services = ('caddy', 'treeroot-panel', 'xray')
+    if Path('/etc/systemd/system/treeroot-limits.service').exists():
+        services += ('treeroot-limits',)
     active = [name for name in services if subprocess.run(
         ['systemctl', 'is-active', '--quiet', name]).returncode == 0]
     try:
@@ -68,6 +71,8 @@ def backup(public_ip, stop_services=False):
         run('runuser', '-u', 'treeroot', '--', str(APP / 'venv/bin/python'), '-c',
             'import app; app.collect_stats(); app.collect_access()', cwd=APP)
         run('systemctl', 'stop', 'xray')
+        if 'treeroot-limits' in services:
+            run('systemctl', 'stop', 'treeroot-limits')
         return create_backup(public_ip, True)
     except BaseException:
         if active:
@@ -137,6 +142,9 @@ def health():
         response = urllib.request.urlopen('http://127.0.0.1:19991/assets/' + name, timeout=3)
         if response.status != 200 or content_type not in response.headers.get('Content-Type', ''):
             raise RuntimeError('Static resource check failed: ' + name)
+    if Path('/etc/systemd/system/treeroot-limits.service').exists():
+        with socket.create_connection(('127.0.0.1', 10002), timeout=2):
+            pass
 
 
 def update(archive, public_ip):
@@ -160,6 +168,8 @@ def update(archive, public_ip):
         rollback.mkdir()
         for name in FILES:
             copy_file(APP / name, rollback / name)
+        restart_limits = (Path('/etc/systemd/system/treeroot-limits.service').exists() and
+                          (not (APP / 'limits.py').exists() or digest(APP / 'limits.py') != digest(staging / 'limits.py')))
         try:
             run('systemctl', 'stop', 'treeroot-panel')
             for name in FILES:
@@ -167,6 +177,8 @@ def update(archive, public_ip):
                 os.chown(APP / name, 0, 0)
                 os.chmod(APP / name, 0o644)
             run('systemctl', 'start', 'treeroot-panel')
+            if restart_limits:
+                run('systemctl', 'restart', 'treeroot-limits')
             for attempt in range(20):
                 try:
                     health()
@@ -183,8 +195,11 @@ def update(archive, public_ip):
                 elif (APP / name).exists():
                     (APP / name).unlink()
             run('systemctl', 'start', 'treeroot-panel')
+            if restart_limits:
+                run('systemctl', 'restart', 'treeroot-limits')
             raise
         return {'updated': True, 'backup': snapshot, 'xray_and_caddy_restarted': False,
+                'limiter_restarted': restart_limits,
                 'sha256': {name: digest(APP / name) for name in FILES}}
 
 
@@ -193,6 +208,8 @@ def status():
     services = {}
     for service in ('xray', 'caddy', 'treeroot-panel', 'treeroot-backup.timer'):
         services[service] = run('systemctl', 'is-active', service).stdout.strip()
+    if Path('/etc/systemd/system/treeroot-limits.service').exists():
+        services['treeroot-limits'] = run('systemctl', 'is-active', 'treeroot-limits').stdout.strip()
     with closing(sqlite3.connect(DATA / 'panel.sqlite3')) as db:
         integrity = db.execute('PRAGMA quick_check').fetchone()[0]
         users, enabled = db.execute('SELECT COUNT(*),SUM(enabled) FROM users').fetchone()

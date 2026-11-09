@@ -259,6 +259,31 @@ class PanelTests(unittest.TestCase):
         with self.panel.database() as db:
             self.assertEqual(tuple(db.execute('SELECT client_uuid,token,upload,download FROM users WHERE id=1').fetchone()), identity)
 
+    def test_account_limits_save_validate_and_preserve_identity_statistics(self):
+        with self.panel.database() as db:
+            db.execute('UPDATE users SET upload=123,download=456 WHERE id=1')
+            identity = tuple(db.execute('SELECT * FROM users WHERE id=1').fetchone())
+        settings = {'total_bytes': 500, 'daily_bytes': 1000, 'speed_bps': 8000000}
+        self.assertEqual(self.client.patch('/api/users/1/limits', json=settings).status_code, 403)
+        response = self.client.patch('/api/users/1/limits', headers=self.headers, json=settings)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual({key: data[key] for key in settings}, settings)
+        self.assertEqual((data['total_used'], data['blocked'], data['ready']), (579, 'total', False))
+        with self.panel.database() as db:
+            self.assertEqual(tuple(db.execute('SELECT * FROM users WHERE id=1').fetchone()), identity)
+            db.execute("INSERT INTO state VALUES('limits_heartbeat',?)", (str(time.time()),))
+        self.assertTrue(self.client.get('/api/users/1/limits').json()['ready'])
+        self.assertEqual(self.client.get('/api/users').json()[0]['limits']['blocked'], 'total')
+        for body in [{'total_bytes': -1}, {'daily_bytes': 1.5}, {'speed_bps': '8'},
+                     {'speed_bps': True}, {'total_bytes': 9007199254740992}]:
+            self.assertEqual(self.client.patch('/api/users/1/limits', headers=self.headers, json=body).status_code, 422)
+        self.assertEqual(self.client.patch('/api/users/999/limits', headers=self.headers, json={}).status_code, 404)
+        self.assertEqual(self.client.get('/api/users/999/limits').status_code, 404)
+        cleared = self.client.patch('/api/users/1/limits', headers=self.headers, json={}).json()
+        self.assertIsNone(cleared['blocked'])
+        self.assertEqual(cleared['total_bytes'] + cleared['daily_bytes'] + cleared['speed_bps'], 0)
+
     def test_trend_calendar_boundaries_user_filter_and_daily_cards(self):
         self.seed_events()
         stamp = lambda text: int(datetime.fromisoformat(text).replace(tzinfo=timezone.utc).timestamp())
@@ -389,7 +414,7 @@ class PanelTests(unittest.TestCase):
 
     def test_create_toggle_reset_and_failed_change_keep_statistics(self):
         config = Mock()
-        config.read_bytes.return_value = b'fixture-config'
+        config.read_bytes.return_value = b'{"outbounds": []}'
         with patch.object(self.panel, 'XRAY_CONFIG', config), \
              patch.object(self.panel, 'xray_api'), patch.object(self.panel, 'add_runtime_user'), \
              patch.object(self.panel, 'save_xray_config') as save:

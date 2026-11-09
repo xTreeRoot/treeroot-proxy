@@ -12,12 +12,52 @@ from unittest.mock import patch, Mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'ops'))
 import bootstrap
+import limits_setup
 import manage
 import remote
 import releases
 
 
 class OperationsTests(unittest.TestCase):
+    def test_limiter_install_failure_restores_config_and_service_without_resetting_db(self):
+        import json
+        import limits
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config, unit, database = root / 'xray.json', root / 'limiter.service', root / 'panel.sqlite3'
+            original = {'api': {'services': ['HandlerService']}, 'outbounds': [
+                {'tag': 'direct', 'protocol': 'freedom'}, {'tag': 'block', 'protocol': 'blackhole'}],
+                'routing': {'rules': []}}
+            config.write_text(json.dumps(original))
+            original_bytes = config.read_bytes()
+            with closing(sqlite3.connect(database)) as db, db:
+                db.executescript('''CREATE TABLE users(id INTEGER PRIMARY KEY,email TEXT,client_uuid TEXT,
+                  enabled INTEGER,upload INTEGER,download INTEGER);
+                  CREATE TABLE traffic(ts INTEGER,user_id INTEGER,upload INTEGER,download INTEGER);
+                  CREATE TABLE state(key TEXT PRIMARY KEY,value TEXT);
+                  INSERT INTO users VALUES(1,'fixture@example.test','keep-id',1,123,456);''')
+                limits.initialize(db)
+            backup = root / 'backup.tar.gz'
+            with tarfile.open(backup, 'w:gz') as archive:
+                for name, data in [('config/xray.json', original_bytes), ('data/panel.sqlite3', database.read_bytes()),
+                                   ('manifest.json', b'{"sha256":{}}')]:
+                    info = tarfile.TarInfo(name)
+                    info.size = len(data)
+                    archive.addfile(info, io.BytesIO(data))
+            with patch.object(limits_setup, 'CONFIG', config), patch.object(limits_setup, 'UNIT', unit), \
+                 patch.object(limits_setup, 'DB', database), patch.object(limits_setup.os, 'geteuid', return_value=0), \
+                 patch.object(limits_setup.os, 'chown'), patch.object(limits_setup, 'validate'), \
+                 patch.object(limits_setup, 'run') as run, \
+                 patch.object(limits_setup.subprocess, 'run', return_value=Mock(returncode=1)):
+                run.side_effect = lambda *args: (_ for _ in ()).throw(RuntimeError('fixture restart failed')) if args == ('systemctl', 'enable', '--now', 'treeroot-limits') else ''
+                with self.assertRaisesRegex(RuntimeError, 'fixture restart failed'):
+                    limits_setup.install(backup)
+            self.assertEqual(config.read_bytes(), original_bytes)
+            self.assertFalse(unit.exists())
+            with closing(sqlite3.connect(database)) as db:
+                self.assertEqual(db.execute('SELECT client_uuid,upload,download FROM users').fetchone(), ('keep-id', 123, 456))
+                self.assertIsNone(db.execute("SELECT value FROM state WHERE key='limits_active'").fetchone())
+
     def test_cleanup_validates_two_backups_before_deleting_only_project_packages(self):
         with tempfile.TemporaryDirectory() as temporary:
             folder = Path(temporary)

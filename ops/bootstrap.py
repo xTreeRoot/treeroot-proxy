@@ -87,7 +87,7 @@ def install(args):
             print('Target rollback backup:', prior['archive'], flush=True)
         execute('apt-get', 'update')
         execute('apt-get', 'install', '-y', 'python3-venv', 'ca-certificates', 'logrotate')
-        for service in ['treeroot-backup.timer', 'treeroot-backup.service', 'treeroot-panel', 'xray', 'caddy']:
+        for service in ['treeroot-backup.timer', 'treeroot-backup.service', 'treeroot-panel', 'treeroot-limits', 'xray', 'caddy']:
             subprocess.run(['systemctl', 'stop', service], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         xray = ensure_user('xray')
         treeroot = ensure_user('treeroot')
@@ -106,6 +106,8 @@ def install(args):
         Path('/usr/local/bin/caddy').chmod(0o755)
         for name in FILES:
             # Backups predating additive features retain their original application.
+            if name == 'limits.py' and not (root / 'app' / name).exists():
+                continue
             if name in ('egress.py', 'egress.js', 'egress.css', 'connector.py', 'egress_proxy.py') and not (root / 'app' / name).exists() and 'egress.js' not in (root / 'app/index.html').read_text():
                 continue
             if name == 'echarts.min.js' and not (root / 'app' / name).exists() and 'echarts.min.js' not in (root / 'app/index.html').read_text():
@@ -155,6 +157,8 @@ def install(args):
         caddyfile = (root / 'config/Caddyfile').read_text().replace(manifest['public_ip'], args.public_ip)
         Path('/etc/caddy/Caddyfile').write_text(caddyfile)
         for name in UNITS:
+            if name == 'treeroot-limits.service' and not (root / 'services' / name).exists():
+                continue
             shutil.copyfile(root / 'services' / name, Path('/etc/systemd/system') / name)
         copy = root / 'logrotate/treeroot'
         if copy.exists():
@@ -164,6 +168,8 @@ def install(args):
         execute('/usr/local/bin/caddy', 'validate', '--config', '/etc/caddy/Caddyfile')
         execute('systemctl', 'daemon-reload')
         execute('systemctl', 'enable', '--now', 'xray', 'caddy', 'treeroot-panel', 'treeroot-backup.timer')
+        if (root / 'services/treeroot-limits.service').exists():
+            execute('systemctl', 'enable', '--now', 'treeroot-limits')
         print(json.dumps({'restored': True, 'users': count, 'domain': manifest['domain'],
                           'new_ip': args.public_ip, 'dns_changed': False}, ensure_ascii=False))
 

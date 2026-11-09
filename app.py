@@ -24,6 +24,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from egress import install_routes as install_egress_routes
+import limits
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = json.loads(Path(os.environ.get('TREEROOT_CONFIG', '/etc/treeroot/config.json')).read_text())
@@ -134,6 +135,7 @@ def initialize():
         if not db.execute('SELECT 1 FROM users').fetchone():
             db.execute('INSERT INTO users(name,client_uuid,email,token,created) VALUES(?,?,?,?,?)',
                        ('我的设备', CONFIG['initial_uuid'], 'owner@treeroot.local', CONFIG['initial_token'], int(time.time())))
+        limits.initialize(db)
     os.chmod(DB, 0o600)
     egress_manager.initialize(DATA)
 
@@ -172,6 +174,8 @@ def save_xray_config(db):
     config = json.loads(XRAY_CONFIG.read_text())
     inbound = next(x for x in config['inbounds'] if x.get('tag') == 'websocket-in')
     inbound['settings']['clients'] = [user_client(u) for u in db.execute('SELECT * FROM users WHERE enabled=1')]
+    if limits.configured(config):
+        config = limits.xray_config(config, db.execute('SELECT * FROM users').fetchall())
     production_log = config.get('log', {})
     config['log'] = {'access': 'none', 'loglevel': 'none'}
     fd, filename = tempfile.mkstemp(dir=XRAY_CONFIG.parent, suffix='.json')
@@ -187,6 +191,25 @@ def save_xray_config(db):
         with open(filename, 'w') as f:
             json.dump(config, f, indent=2)
         os.replace(filename, XRAY_CONFIG)
+    finally:
+        Path(filename).unlink(missing_ok=True)
+
+
+def sync_limits_routing(current):
+    if not limits.configured(current):
+        return
+    before = {item['tag'] for item in json.loads(xray_api('lso')).get('outbounds', []) if item['tag'].startswith(limits.PREFIX)}
+    after = {item['tag']: item for item in current['outbounds'] if item['tag'].startswith(limits.PREFIX)}
+    fd, filename = tempfile.mkstemp(dir=DATA, suffix='.json')
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            json.dump({'outbounds': [after[tag] for tag in after.keys() - before],
+                       'routing': current['routing']}, stream)
+        if after.keys() - before:
+            xray_api('ado', filename)
+        xray_api('adrules', filename)
+        for tag in before - after.keys():
+            xray_api('rmo', tag)
     finally:
         Path(filename).unlink(missing_ok=True)
 
@@ -223,6 +246,7 @@ def change_user(user_id, changes=None, new_name=None):
                     add_runtime_user(new)
                     added = True
                 save_xray_config(db)
+                sync_limits_routing(json.loads(XRAY_CONFIG.read_bytes()))
             action = 'create_user' if not old else ('reset_subscription' if old['token'] != new['token'] else 'update_user')
             db.execute('INSERT INTO audit(ts,action,user_id) VALUES(?,?,?)', (int(time.time()), action, user_id))
             return public_user(new)
@@ -233,6 +257,7 @@ def change_user(user_id, changes=None, new_name=None):
                 if removed:
                     add_runtime_user(old)
                 if old_config is not None:
+                    sync_limits_routing(json.loads(old_config))
                     XRAY_CONFIG.write_bytes(old_config)
             except Exception:
                 logger.exception('Failed to restore Xray after a rejected user change')
@@ -272,6 +297,8 @@ def collect_stats():
                 db.execute('INSERT INTO traffic VALUES(?,?,?,?) ON CONFLICT(ts,user_id) DO UPDATE SET upload=upload+excluded.upload,download=download+excluded.download',
                            (now // 60 * 60, user_id, upload, download))
         db.execute('DELETE FROM traffic WHERE ts<?', (now - 31 * 86400,))
+        db.execute("INSERT INTO state VALUES('limits_stats_sample',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                   (str(time.time()),))
     with RATE_LOCK:
         RATES.update(sample_time=sample_time, run=run_id, users=rates if rates_ready else {})
         STATUS['last_poll'] = now
@@ -483,8 +510,9 @@ def users(session=Depends(authenticated)):
                              FROM users u LEFT JOIN
                              (SELECT user_id,COUNT(*) domains,SUM(connections) connections,MAX(last_seen) last_seen FROM domains GROUP BY user_id) d
                              ON d.user_id=u.id ORDER BY u.id''').fetchall()
+        _, settings = limits.snapshot(db)
     return [public_user(user) | {'domains': user['domains'], 'connections': user['connections'],
-                                'last_used': user['last_seen']} for user in rows]
+                                'last_used': user['last_seen'], 'limits': limits.public_limits(settings[user['id']])} for user in rows]
 
 
 class NewUser(BaseModel):
@@ -528,6 +556,40 @@ def reset_subscription(user_id: int, session=Depends(authenticated)):
     except (RuntimeError, subprocess.SubprocessError):
         logger.exception('Could not reset subscription')
         raise HTTPException(503, '订阅重置失败，改动已回滚')
+
+
+class UserLimits(BaseModel):
+    total_bytes: int = Field(default=0, ge=0, le=9007199254740991, strict=True)
+    daily_bytes: int = Field(default=0, ge=0, le=9007199254740991, strict=True)
+    speed_bps: int = Field(default=0, ge=0, le=1000000000000, strict=True)
+
+
+def user_limits_snapshot(db, user_id):
+    _, settings = limits.snapshot(db)
+    if user_id not in settings:
+        raise HTTPException(404, '用户不存在')
+    heartbeat = db.execute("SELECT value FROM state WHERE key='limits_heartbeat'").fetchone()
+    ready = bool(heartbeat and 0 <= time.time() - float(heartbeat[0]) < 5)
+    return limits.public_limits(settings[user_id]) | {'ready': ready}
+
+
+@app.get('/api/users/{user_id}/limits')
+def get_user_limits(user_id: int, session=Depends(authenticated)):
+    with report_database() as db:
+        return user_limits_snapshot(db, user_id)
+
+
+@app.patch('/api/users/{user_id}/limits')
+def update_user_limits(user_id: int, body: UserLimits, session=Depends(authenticated)):
+    with user_change_lock(), database() as db:
+        if not db.execute('SELECT 1 FROM users WHERE id=?', (user_id,)).fetchone():
+            raise HTTPException(404, '用户不存在')
+        db.execute('''INSERT INTO user_limits VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE
+            SET total_bytes=excluded.total_bytes,daily_bytes=excluded.daily_bytes,
+                speed_bps=excluded.speed_bps,updated=excluded.updated''',
+            (user_id, body.total_bytes, body.daily_bytes, body.speed_bps, int(time.time())))
+        db.execute("INSERT INTO audit(ts,action,user_id) VALUES(?,'update_limits',?)", (int(time.time()), user_id))
+        return user_limits_snapshot(db, user_id)
 
 
 def rate_snapshot(user_id=None):
@@ -629,7 +691,7 @@ def server_information(session=Depends(authenticated)):
                 pass
         try:
             response = subprocess.run(['systemctl', 'show', 'xray.service', 'caddy.service',
-                'treeroot-panel.service', 'treeroot-backup.timer', 'socialcrawlerhub.service',
+                'treeroot-panel.service', 'treeroot-limits.service', 'treeroot-backup.timer', 'socialcrawlerhub.service',
                 'socialcrawlerhub-browser.service', 'mysql.service',
                 '--property=Id,Description,ActiveState,SubState,MainPID,MemoryCurrent,ActiveEnterTimestamp,WorkingDirectory'],
                 capture_output=True, text=True, timeout=2, check=True)
