@@ -1,10 +1,11 @@
 'use strict';
 const $ = s => document.querySelector(s);
-const state = {csrf:'',users:[],page:'overview',filter:'',userFilter:'',activityFilter:'',activitySearch:'',usersLoadedAt:0,lastFullRefresh:0,edit:null,refreshing:false,pagination:{users:{page:1,size:6},usage:{page:1,size:6},activity:{page:1,size:25,anchor:null},'egress-records':{page:1,size:25,anchor:null}},activityRequest:0};
+const state = {csrf:'',users:[],page:'overview',filter:'',trend:{year:'',month:'',day:''},userFilter:'',activityFilter:'',activitySearch:'',usersLoadedAt:0,lastFullRefresh:0,edit:null,refreshing:false,pagination:{users:{page:1,size:6},usage:{page:1,size:6},activity:{page:1,size:25,anchor:null},'egress-records':{page:1,size:25,anchor:null}},activityRequest:0};
 const titles = {overview:'运行概览','egress-dashboard':'出口流量大盘','proxy-dashboard':'代理流量大盘',users:'用户与订阅',activity:'访问记录',egress:'电脑出口','egress-records':'电脑出口详细记录',settings:'管理设置'};
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function bytes(value){value=Number(value)||0;if(value<1024)return Math.round(value)+' B';const n=Math.min(Math.floor(Math.log(value)/Math.log(1024)),4);return (value/1024**n).toFixed(n>1?2:1)+' '+['B','KB','MB','GB','TB'][n];}
 function date(value){return value?new Date(value*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}):'—';}
+function userTimes(user,created=false){const full=value=>new Date(value*1000).toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});return `<div class="user-times">${created?`<span>创建：${full(user.created)}</span>`:''}<span title="最近一次代理连接时间">上次使用：${user.last_used?full(user.last_used):'从未使用'}</span></div>`;}
 let toastTimer;
 function toast(message){$('#toast').textContent=message;$('#toast').classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('visible'),4000);}
 function showLogin(){state.csrf='';$('#app').classList.add('hidden');$('#login').classList.remove('hidden');}
@@ -28,17 +29,17 @@ function renderUsers(){
   const selected=state.page==='users'?state.userFilter:state.filter;
   const visible=state.users.filter(u=>!selected||u.id===Number(selected));
   if(state.page==='users'){
-  $('#user-cards').innerHTML=cardPage('users',visible).map(u=>`<article class="user-card"><div class="user-card-head"><div class="user-card-name">${avatar(u.name)}<div><h2>${esc(u.name)}</h2><small>${date(u.created)}</small></div></div>${badge(u.enabled)}</div><div class="user-stats"><div><span>累计流量</span><b>${bytes(u.upload+u.download)}</b></div><div><span>访问域名</span><b>${u.domains}</b></div><div><span>累计连接</span><b>${u.connections.toLocaleString()}</b></div></div><div class="user-card-actions"><button class="button primary" data-action="subscription" data-id="${u.id}">订阅链接</button><button class="button subtle" data-action="view" data-id="${u.id}">查看统计</button><button class="text-button" data-action="rename" data-id="${u.id}">重命名</button><button class="text-button" data-action="toggle" data-id="${u.id}">${u.enabled?'禁用':'启用'}</button><button class="text-button" data-action="reset" data-id="${u.id}">重置订阅</button></div></article>`).join('')||'<div class="empty">暂无用户</div>';
+  $('#user-cards').innerHTML=cardPage('users',visible).map(u=>`<article class="user-card"><div class="user-card-head"><div class="user-card-name">${avatar(u.name)}<div><h2>${esc(u.name)}</h2>${userTimes(u,true)}</div></div>${badge(u.enabled)}</div><div class="user-stats"><div><span>累计流量</span><b>${bytes(u.upload+u.download)}</b></div><div><span>访问域名</span><b>${u.domains}</b></div><div><span>累计连接</span><b>${u.connections.toLocaleString()}</b></div></div><div class="user-card-actions"><button class="button primary" data-action="subscription" data-id="${u.id}">订阅链接</button><button class="button subtle" data-action="view" data-id="${u.id}">查看统计</button><button class="text-button" data-action="rename" data-id="${u.id}">重命名</button><button class="text-button" data-action="toggle" data-id="${u.id}">${u.enabled?'禁用':'启用'}</button><button class="text-button" data-action="reset" data-id="${u.id}">重置订阅</button></div></article>`).join('')||'<div class="empty">暂无用户</div>';
   }
   if(state.page==='proxy-dashboard'){
   $('#overview-user-filter').value=state.filter;
   $('#usage-title').textContent=selected?(state.users.find(u=>String(u.id)===selected)?.name||'用户')+' · 使用情况':'用户使用情况';
   $('#overview-reset').classList.toggle('hidden',!selected);
-  $('#usage-cards').innerHTML=cardPage('usage',visible).map(u=>`<article class="usage-card"><div class="user-card-head"><div class="user-card-name">${avatar(u.name)}<h3>${esc(u.name)}</h3></div>${badge(u.enabled)}</div><div class="user-stats"><div><span>上传</span><b>${bytes(u.upload)}</b></div><div><span>下载</span><b>${bytes(u.download)}</b></div><div><span>访问域名</span><b>${u.domains.toLocaleString()}</b></div><div><span>累计连接</span><b>${u.connections.toLocaleString()}</b></div></div></article>`).join('')||'<div class="empty">暂无用户</div>';
+  $('#usage-cards').innerHTML=cardPage('usage',visible).map(u=>`<article class="usage-card"><div class="user-card-head"><div class="user-card-name">${avatar(u.name)}<div><h3>${esc(u.name)}</h3>${userTimes(u)}</div></div>${badge(u.enabled)}</div><div class="user-stats"><div><span>上传</span><b>${bytes(u.upload)}</b></div><div><span>下载</span><b>${bytes(u.download)}</b></div><div><span>访问域名</span><b>${u.domains.toLocaleString()}</b></div><div><span>累计连接</span><b>${u.connections.toLocaleString()}</b></div></div></article>`).join('')||'<div class="empty">暂无用户</div>';
   }
 }
 let trafficChart;
-function renderTraffic(points,target='traffic-chart',hours=24){
+function renderTraffic(points,target='traffic-chart',hours=24,granularity='hour'){
   if((target==='traffic-chart'&&state.page!=='proxy-dashboard')||(target==='egress-traffic-chart'&&state.page!=='egress-dashboard'))return;
   const element=$('#'+target),chart=echarts.getInstanceByDom(element)||echarts.init(element,null,{renderer:'svg'});
   if(target==='traffic-chart')trafficChart=chart;
@@ -48,17 +49,37 @@ function renderTraffic(points,target='traffic-chart',hours=24){
     color:['#729dff','#5addc0'],textStyle:{fontFamily:'-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif'},
     grid:{left:16,right:22,top:42,bottom:18,containLabel:true},
     legend:{top:0,right:18,itemWidth:12,itemHeight:6,textStyle:{color:'#98a8c1',fontSize:10}},
-    tooltip:{trigger:'axis',backgroundColor:'#152238',borderColor:'#354762',textStyle:{color:'#edf2fb',fontSize:12},valueFormatter:value=>bytes(value)},
-    xAxis:{type:'category',boundaryGap:false,data:points.map(p=>new Date(p.ts*1000).toLocaleString('zh-CN',{...(hours>24?{month:'2-digit',day:'2-digit'}:{}),hour:'2-digit',minute:'2-digit',hour12:false})),axisLine:axis,axisTick:{show:false},axisLabel:{color:'#98a8c1',fontSize:10,hideOverlap:true}},
+    tooltip:{trigger:'axis',confine:true,backgroundColor:'#152238',borderColor:'#354762',textStyle:{color:'#edf2fb',fontSize:12},valueFormatter:value=>bytes(value)},
+    xAxis:{type:'category',boundaryGap:false,data:points.map(p=>String(p.ts)),axisLine:axis,axisTick:{show:false},axisLabel:{color:'#98a8c1',fontSize:10,hideOverlap:true,formatter:value=>trendDate(value,granularity,false,target)},axisPointer:{label:{formatter:params=>trendDate(params.value,granularity,true,target)}}},
     yAxis:{type:'value',min:0,axisLine:axis,axisTick:{show:false},axisLabel:{color:'#98a8c1',fontSize:10,formatter:value=>bytes(value)},splitLine:{lineStyle:{color:'#26344a',width:0.5}}},
     series:[{name:'下载',type:'line',data:points.map(p=>p.download),showSymbol:false,lineStyle:{width:1.5},areaStyle:{opacity:0.08}},{name:'上传',type:'line',data:points.map(p=>p.upload),showSymbol:false,lineStyle:{width:1.5},areaStyle:{opacity:0.04}}]
   });
 }
 new ResizeObserver(()=>{if(trafficChart&&$('#traffic-chart').clientWidth)trafficChart.resize();}).observe($('#traffic-chart'));
+function trendDate(value,granularity,full=false,target='traffic-chart'){
+  const stamp=new Date(Number(value)*1000),options={month:'2-digit',...(granularity!=='month'?{day:'2-digit'}:{}),...(granularity==='hour'?{hour:'2-digit',minute:'2-digit',hour12:false}:{}),...(full?{year:'numeric'}:{})};
+  if(granularity==='hour'&&!full&&target==='traffic-chart'&&state.trend.day)return stamp.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false});
+  const label=stamp.toLocaleString('zh-CN',options);
+  return !full&&granularity==='hour'?label.replace(' ','\n'):label;
+}
+function renderTrendFilters(){
+  const now=new Date(),earliest=new Date(Date.now()-31*86400000);
+  $('#traffic-year').innerHTML='<option value="">最近 24 小时</option>'+Array.from({length:now.getFullYear()-earliest.getFullYear()+1},(_,i)=>`<option value="${now.getFullYear()-i}">${now.getFullYear()-i} 年</option>`).join('');
+  $('#traffic-year').value=state.trend.year;
+  $('#traffic-month').innerHTML='<option value="">全年</option>'+Array.from({length:12},(_,i)=>`<option value="${i+1}">${i+1} 月</option>`).join('');
+  $('#traffic-month').value=state.trend.month;$('#traffic-month').disabled=!state.trend.year;
+  const days=state.trend.month?new Date(Number(state.trend.year),Number(state.trend.month),0).getDate():0;
+  $('#traffic-day').innerHTML='<option value="">全月</option>'+Array.from({length:days},(_,i)=>`<option value="${i+1}">${i+1} 日</option>`).join('');
+  $('#traffic-day').value=state.trend.day;$('#traffic-day').disabled=!state.trend.month;
+}
+function proxyOverviewQuery(){const params=new URLSearchParams({time_zone:Intl.DateTimeFormat().resolvedOptions().timeZone||'Asia/Shanghai'});if(state.filter)params.set('user_id',state.filter);for(const [key,value] of Object.entries(state.trend))if(value)params.set(key,value);return params.toString();}
 function renderOverview(data){
   $('#total-traffic').textContent=bytes(data.upload+data.download);$('#total-breakdown').textContent=`↑ ${bytes(data.upload)} · ↓ ${bytes(data.download)}`;$('#day-traffic').textContent=bytes(data.day_upload+data.day_download);$('#active-users').textContent=data.active+' / '+data.users;$('#connections').textContent=data.connections.toLocaleString();
   renderRates(data);
-  const now=Math.floor(Date.now()/3600000)*3600;const hourly=new Map(data.series.map(x=>[x.ts,x]));const points=Array.from({length:24},(_,i)=>hourly.get(now-(23-i)*3600)||{ts:now-(23-i)*3600,upload:0,download:0});renderTraffic(points);$('#traffic-chart').setAttribute('aria-label',`最近24小时上传${bytes(data.day_upload)}，下载${bytes(data.day_download)}`);
+  const trend=data.trend,range=trend.year?`${trend.year} 年${trend.month?' '+trend.month+' 月':''}${trend.day?' '+trend.day+' 日':''}`:'最近 24 小时';
+  renderTraffic(data.series,'traffic-chart',24,trend.granularity);$('#traffic-trend-range').textContent=range+' · 按'+({month:'月',day:'日',hour:'小时'}[trend.granularity]);
+  $('#traffic-chart').setAttribute('aria-label',range+'上传和下载流量趋势');
+  $('#traffic-trend-note').textContent=`按本地时区统计（${trend.time_zone}）；仅保留最近 31 天流量明细，早于 ${date(trend.retained_since)} 的数据已过期。${data.series.some(p=>p.upload||p.download)?'':'当前范围暂无流量记录。'}`;
   const top=data.domains[0]?.connections||1;$('#domain-list').innerHTML=data.domains.length?data.domains.map(d=>`<div class="domain-row"><div class="domain-name"><span title="${esc(d.domain)}">${esc(d.domain)}</span><span>${d.connections.toLocaleString()} 次</span></div><div class="domain-track"><div class="domain-fill" style="width:${d.connections/top*100}%"></div></div></div>`).join(''):'<div class="empty">暂无记录</div>';
 }
 function renderRates(data){
@@ -125,7 +146,7 @@ async function refresh(){
   if(!state.csrf)return;
   if(state.refreshing){state.pending=true;return;}
   state.refreshing=true;
-  const pageAtStart=state.page,filterAtStart=state.filter;
+  const pageAtStart=state.page,trendAtStart=proxyOverviewQuery();
   try{
     if(pageAtStart==='egress'){await refreshEgress();state.lastFullRefresh=Date.now();return;}
     if(pageAtStart==='egress-records'){await refreshEgressRecords();state.lastFullRefresh=Date.now();return;}
@@ -133,8 +154,8 @@ async function refresh(){
     if(pageAtStart==='overview'){await Promise.all([refreshResources(),refreshServerInformation()]);state.lastFullRefresh=Date.now();return;}
     if(pageAtStart==='egress-dashboard'){await Promise.all([refreshEgressOverview(),refreshEgressRates()]);state.lastFullRefresh=Date.now();return;}
     if(pageAtStart==='proxy-dashboard'){
-      const [,overview]=await Promise.all([loadUsers(),api('/overview'+(filterAtStart?'?user_id='+filterAtStart:''))]);
-      if(pageAtStart!==state.page||filterAtStart!==state.filter){state.pending=true;return;}
+      const [,overview]=await Promise.all([loadUsers(),api('/overview?'+trendAtStart)]);
+      if(pageAtStart!==state.page||trendAtStart!==proxyOverviewQuery()){state.pending=true;return;}
       renderUsers();renderOverview(overview);
     }else{
       await loadUsers();if(pageAtStart!==state.page){state.pending=true;return;}
@@ -162,6 +183,9 @@ $('#activity-search-form').addEventListener('submit',event=>{event.preventDefaul
 $('#activity-search-form').addEventListener('reset',()=>{state.activityFilter='';state.activitySearch='';resetPagination('activity');$('#activity-table').scrollTop=0;renderActivity().catch(error=>toast(error.message));});
 $('#overview-reset').addEventListener('click',()=>{state.filter='';resetPagination('usage');refresh();});
 $('#overview-user-filter').addEventListener('change',event=>{state.filter=event.target.value;resetPagination('usage');refresh();refreshRates();});
+for(const key of ['year','month','day'])$('#traffic-'+key).addEventListener('change',event=>{state.trend[key]=event.target.value;if(key==='year'){state.trend.month='';state.trend.day='';}if(key==='month')state.trend.day='';renderTrendFilters();refresh();});
+$('#traffic-trend-reset').addEventListener('click',()=>{state.trend={year:'',month:'',day:''};renderTrendFilters();refresh();});
+renderTrendFilters();
 $('#logout').addEventListener('click',event=>busy(event.currentTarget,async()=>{await api('/logout',{method:'POST',body:'{}'});showLogin();}));
 $('#password-form').addEventListener('submit',event=>{event.preventDefault();busy(event.submitter,async()=>{await api('/password',{method:'POST',body:JSON.stringify({current:$('#old-password').value,password:$('#new-password').value})});event.target.reset();toast('管理员密码已更新');});});
 setInterval(()=>{if(document.hidden||!state.csrf)return;refreshRates();refreshResources();if(state.page==='egress-dashboard')refreshEgressRates();if(state.page!=='settings'&&Date.now()-state.lastFullRefresh>=15000)refresh();},5000);

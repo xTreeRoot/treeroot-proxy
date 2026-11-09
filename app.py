@@ -1,6 +1,6 @@
 import base64
 from contextlib import asynccontextmanager, contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import importlib.metadata
@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 import uuid
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
@@ -478,11 +479,12 @@ def public_user(user):
 @app.get('/api/users')
 def users(session=Depends(authenticated)):
     with report_database() as db:
-        rows = db.execute('''SELECT u.*,COALESCE(d.domains,0) domains,COALESCE(d.connections,0) connections
+        rows = db.execute('''SELECT u.*,COALESCE(d.domains,0) domains,COALESCE(d.connections,0) connections,d.last_seen
                              FROM users u LEFT JOIN
-                             (SELECT user_id,COUNT(*) domains,SUM(connections) connections FROM domains GROUP BY user_id) d
+                             (SELECT user_id,COUNT(*) domains,SUM(connections) connections,MAX(last_seen) last_seen FROM domains GROUP BY user_id) d
                              ON d.user_id=u.id ORDER BY u.id''').fetchall()
-    return [public_user(user) | {'domains': user['domains'], 'connections': user['connections']} for user in rows]
+    return [public_user(user) | {'domains': user['domains'], 'connections': user['connections'],
+                                'last_used': user['last_seen']} for user in rows]
 
 
 class NewUser(BaseModel):
@@ -646,18 +648,83 @@ def server_information(session=Depends(authenticated)):
         return data
 
 
+def traffic_trend(db, now, condition, values, year, month, day, time_zone):
+    try:
+        zone = ZoneInfo(time_zone)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise HTTPException(422, '请选择有效的统计时区')
+    if (month is not None and year is None) or (day is not None and month is None):
+        raise HTTPException(422, '请先选择年份和月份')
+    granularity = 'hour' if year is None or day is not None else 'day' if month is not None else 'month'
+    if year is None:
+        since, until = now - 86400, now + 1
+        first = now // 3600 * 3600 - 23 * 3600
+        stamps = list(range(first, first + 86400, 3600))
+        rows = db.execute('SELECT CAST(ts/3600 AS INTEGER)*3600 ts,SUM(upload) upload,SUM(download) download '
+                          'FROM traffic WHERE ts>=? AND ts<?' + condition + ' GROUP BY CAST(ts/3600 AS INTEGER)',
+                          [since, until, *values])
+    else:
+        try:
+            start = datetime(year, month or 1, day or 1, tzinfo=zone)
+        except ValueError:
+            raise HTTPException(422, '请选择有效的年月日')
+        if day is not None:
+            end = start + timedelta(days=1)
+        elif month is not None:
+            end = datetime(year + (month == 12), month % 12 + 1, 1, tzinfo=zone)
+        else:
+            end = datetime(year + 1, 1, 1, tzinfo=zone)
+        since, until = int(start.timestamp()), int(end.timestamp())
+        stamps = []
+        cursor = start
+        while cursor < end:
+            stamps.append(int(cursor.timestamp()))
+            if granularity == 'month':
+                cursor = datetime(cursor.year + (cursor.month == 12), cursor.month % 12 + 1, 1, tzinfo=zone)
+            elif granularity == 'day':
+                cursor += timedelta(days=1)
+            else:
+                cursor = datetime.fromtimestamp(cursor.timestamp() + 3600, zone)
+        # Merge users by minute before grouping in the requested calendar timezone.
+        rows = db.execute('SELECT ts,SUM(upload) upload,SUM(download) download FROM traffic '
+                          'WHERE ts>=? AND ts<?' + condition + ' GROUP BY ts', [since, until, *values])
+    points = {ts: {'ts': ts, 'upload': 0, 'download': 0} for ts in stamps}
+    for row in rows:
+        stamp = row['ts']
+        if year is not None:
+            local = datetime.fromtimestamp(stamp, zone)
+            fields = {'minute': 0, 'second': 0, 'microsecond': 0}
+            if granularity in ('day', 'month'):
+                fields['hour'] = 0
+            if granularity == 'month':
+                fields['day'] = 1
+            stamp = int(local.replace(**fields).timestamp())
+        if stamp in points:
+            points[stamp]['upload'] += row['upload']
+            points[stamp]['download'] += row['download']
+    return {'series': list(points.values()), 'trend': {
+        'year': year, 'month': month, 'day': day, 'granularity': granularity,
+        'since': since, 'until': until, 'time_zone': time_zone, 'retained_since': now - 31 * 86400}}
+
+
 @app.get('/api/overview')
-def overview(user_id: int | None = None, session=Depends(authenticated)):
-    since = int(time.time()) - 24 * 3600
+def overview(user_id: int | None = None, year: int | None = Query(default=None, ge=2000, le=9998),
+             month: int | None = Query(default=None, ge=1, le=12),
+             day: int | None = Query(default=None, ge=1, le=31),
+             time_zone: str = Query(default='Asia/Shanghai', max_length=64), session=Depends(authenticated)):
+    now = int(time.time())
+    since = now - 24 * 3600
     where, args = (' WHERE id=?', [user_id]) if user_id else ('', [])
     with report_database() as db:
         totals = db.execute('SELECT COALESCE(SUM(upload),0) upload,COALESCE(SUM(download),0) download,COUNT(*) users,COALESCE(SUM(enabled),0) active FROM users' + where, args).fetchone()
         condition, values = (' AND user_id=?', [user_id]) if user_id else ('', [])
-        series = [dict(r) for r in db.execute('SELECT CAST(ts/3600 AS INTEGER)*3600 ts,SUM(upload) upload,SUM(download) download FROM traffic WHERE ts>=?' + condition + ' GROUP BY CAST(ts/3600 AS INTEGER) ORDER BY ts', [since, *values])]
+        trend = traffic_trend(db, now, condition, values, year, month, day, time_zone)
+        daily = db.execute('SELECT COALESCE(SUM(upload),0) upload,COALESCE(SUM(download),0) download '
+                           'FROM traffic WHERE ts>=?' + condition, [since, *values]).fetchone()
         domains = [dict(r) for r in db.execute('SELECT domain,SUM(connections) connections,MAX(last_seen) last_seen FROM domains' + (' WHERE user_id=?' if user_id else '') + ' GROUP BY domain ORDER BY connections DESC LIMIT 12', values)]
         connections = db.execute('SELECT COUNT(*) FROM events WHERE ts>=?' + condition, [since, *values]).fetchone()[0]
-    return dict(totals) | {'day_upload': sum(row['upload'] for row in series), 'day_download': sum(row['download'] for row in series),
-                           'connections': connections, 'series': series, 'domains': domains} | rate_snapshot(user_id)
+    return dict(totals) | {'day_upload': daily['upload'], 'day_download': daily['download'],
+                           'connections': connections, 'domains': domains} | trend | rate_snapshot(user_id)
 
 
 @app.get('/api/activity')

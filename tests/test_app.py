@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import sqlite3
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import tempfile
@@ -240,6 +241,67 @@ class PanelTests(unittest.TestCase):
         self.assertEqual((overview['day_upload'], overview['day_download']), (400, 600))
         filtered = self.client.get('/api/overview?user_id=1').json()
         self.assertEqual((filtered['day_upload'], filtered['day_download']), (100, 200))
+
+    def test_user_last_used_keeps_history_and_unused_users_are_null(self):
+        self.seed_events()
+        old = int(time.time()) - 40 * 86400
+        with self.panel.database() as db:
+            db.executemany('INSERT INTO domains VALUES(?,?,?,?)',
+                           [(1, 'older.test', 2, old - 60), (1, 'latest.test', 1, old)])
+            identity = tuple(db.execute('SELECT client_uuid,token,upload,download FROM users WHERE id=1').fetchone())
+        users = self.client.get('/api/users').json()
+        self.assertEqual([u['last_used'] for u in users], [old, None])
+        # Detail retention and renaming must not erase the last connection timestamp.
+        with self.panel.database() as db:
+            db.execute('DELETE FROM events')
+            db.execute("UPDATE users SET name='Renamed',enabled=0 WHERE id=1")
+        self.assertEqual(self.client.get('/api/users').json()[0]['last_used'], old)
+        with self.panel.database() as db:
+            self.assertEqual(tuple(db.execute('SELECT client_uuid,token,upload,download FROM users WHERE id=1').fetchone()), identity)
+
+    def test_trend_calendar_boundaries_user_filter_and_daily_cards(self):
+        self.seed_events()
+        stamp = lambda text: int(datetime.fromisoformat(text).replace(tzinfo=timezone.utc).timestamp())
+        now = stamp('2026-11-09T04:30:00')
+        with self.panel.database() as db:
+            db.executemany('INSERT INTO traffic VALUES(?,?,?,?)', [
+                (stamp('2026-10-31T15:59:00'), 1, 10, 100),
+                (stamp('2026-10-31T16:00:00'), 1, 20, 200),
+                (stamp('2026-11-01T15:59:00'), 1, 30, 300),
+                (stamp('2026-11-01T16:00:00'), 1, 40, 400),
+                (stamp('2026-10-31T16:00:00'), 2, 50, 500),
+                (now // 60 * 60, 1, 60, 600)])
+        with patch.object(self.panel.time, 'time', return_value=now):
+            default = self.client.get('/api/overview').json()
+            yearly = self.client.get('/api/overview?year=2026').json()
+            monthly = self.client.get('/api/overview?year=2026&month=11&user_id=1').json()
+            daily = self.client.get('/api/overview?year=2026&month=11&day=1&user_id=1').json()
+            utc = self.client.get('/api/overview?year=2026&month=11&day=1&user_id=1&time_zone=UTC').json()
+        self.assertEqual(len(default['series']), 24)
+        self.assertEqual(len(yearly['series']), 12)
+        self.assertEqual((yearly['series'][9]['upload'], yearly['series'][10]['upload']), (10, 200))
+        self.assertEqual((monthly['trend']['granularity'], len(monthly['series'])), ('day', 30))
+        self.assertEqual([p['upload'] for p in monthly['series'][:2]], [50, 40])
+        self.assertEqual((daily['trend']['granularity'], len(daily['series'])), ('hour', 24))
+        self.assertEqual((daily['series'][0]['upload'], daily['series'][-1]['upload']), (20, 30))
+        self.assertEqual(sum(p['upload'] for p in utc['series']), 70)
+        for data in [default, yearly, monthly, daily]:
+            self.assertEqual((data['day_upload'], data['day_download']), (60, 600))
+        self.assertEqual(yearly['connections'], default['connections'])
+        self.assertEqual(daily['trend']['since'], stamp('2026-10-31T16:00:00'))
+        self.assertEqual(daily['trend']['until'], stamp('2026-11-01T16:00:00'))
+
+    def test_trend_rejects_invalid_calendar_and_supports_leap_and_dst_days(self):
+        for query in ['month=11', 'day=1', 'year=2026&day=1', 'year=2026&month=2&day=29',
+                      'year=2026&month=13', 'year=2026&month=11&day=31', 'time_zone=Missing/Zone']:
+            self.assertEqual(self.client.get('/api/overview?' + query).status_code, 422, query)
+        leap = self.client.get('/api/overview?year=2024&month=2').json()
+        self.assertEqual(len(leap['series']), 29)
+        empty = self.client.get('/api/overview?year=2024&month=2&day=29').json()
+        self.assertTrue(all(p['upload'] == p['download'] == 0 for p in empty['series']))
+        for day, hours in [('2026&month=3&day=8', 23), ('2026&month=11&day=1', 25)]:
+            result = self.client.get('/api/overview?year=' + day + '&time_zone=America/New_York').json()
+            self.assertEqual(len(result['series']), hours)
 
     def test_server_resources_use_cpu_deltas_and_available_memory_with_shared_cache(self):
         proc = {'/proc/stat': 'cpu 100 0 50 850 0 0 0 0 20 0\n',
