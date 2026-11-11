@@ -105,6 +105,13 @@ def create_backup(public_ip, stop_services):
             copy_file('/etc/systemd/system/treeroot-panel.service.d/egress.conf', root / 'egress/panel-service.conf')
             copy_file('/usr/local/libexec/treeroot-egress-authorize', root / 'egress/authorize.py')
             copy_file('/var/lib/treeroot-egress/registry.json', root / 'egress/registry.json')
+        # Kernel-specific BBRx is archived for audit/rebuild, never blindly restored
+        # onto a different kernel by bootstrap.py.
+        for source, name in [('/etc/systemd/system/treeroot-bbrx.service', 'bbrx.service'),
+                             ('/root/treeroot-ops/bbrx.py', 'bbrx.py'),
+                             ('/root/treeroot-ops/bbrx.json', 'bbrx.json'),
+                             ('/root/treeroot-ops/bbrx/installed.json', 'installed.json')]:
+            copy_file(source, root / 'network' / name)
         for name in FILES:
             copy_file(APP / name, root / 'app' / name)
         if not (root / 'app/requirements.lock').exists():

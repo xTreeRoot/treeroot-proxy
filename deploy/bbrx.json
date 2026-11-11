@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/nivrrex/bbrx",
+  "commit": "7da9f7397f092d64a5837be624ff023821fd0929",
+  "floor_mbps": 1,
+  "sha256": {
+    "Makefile": "c34dbc78991fe12beb09d3dbd0a2cc665b04956e5987a1fc22a30197d4c904ed",
+    "src/tcp_bbrx.c": "dddce52422277a62e14796781dc4e47d10df2d9b4345366100bf18c3d6f10709",
+    "LICENSE": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6"
+  }
+}

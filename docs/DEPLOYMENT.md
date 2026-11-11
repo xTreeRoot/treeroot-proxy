@@ -131,6 +131,62 @@ python3 /root/treeroot-ops/remote.py status
 
 本次没有依赖或数据库结构变更，按正常 `update` 备份发布；回退源码即可，保留最新数据库。趋势仍受现有 31 天明细保留期限制。验证覆盖自然月与日边界、用户筛选、闰日、夏令时、快速切换筛选的旧响应、320/390 像素布局、控制台及静态资源 MIME。
 
+## BBRx 网络拥塞控制
+
+2026-11-11 起使用独立拥塞控制模块 `bbrx`，上游为
+<https://github.com/nivrrex/bbrx>，固定源码提交与逐文件 SHA256 见
+`deploy/bbrx.json`。这是基于 BBR v1 的外部内核模块，不是内核自带的 `bbr`。
+当前已在 Ubuntu 24.04 的 `6.8.0-48-generic` 编译和加载验证；上游列明的验证内核为
+6.6/6.12，不能据此承诺其他内核可用。保留 `fq_codel` 和其他 TCP 参数，只切换拥塞控制。
+
+运维脚本为 `ops/bbrx.py`，在服务器 `/root/treeroot-ops/` 单独运行，不进 Web 发布白名单。
+它从固定提交下载 Makefile、源码与许可证，先校验哈希，再针对当前运行内核编译，
+校验模块名、vermagic 和模块 SHA256；不执行上游安装脚本，不换内核，也不重启代理服务。
+生产安装了 `gcc-13`、`make`，使用现有内核头文件；没有升级原有软件包。
+
+初次部署顺序（本机上传脚本使用 `ops/manage.py` 的严格 SSH 配置）：
+
+1. `python3 ops/manage.py backup`，验证完整包 SHA256、包内逐文件哈希和 SQLite 完整性。
+2. 将 `ops/bbrx.py`、`ops/remote.py` 和 `deploy/bbrx.json` 分别上传为服务器
+   `/root/treeroot-ops/bbrx.py`、`remote.py`、`bbrx.json`。
+3. 服务器执行以下命令，替换实际构建记录、完整备份和试运行快照路径：
+
+```bash
+python3 /root/treeroot-ops/bbrx.py build
+python3 /root/treeroot-ops/bbrx.py trial --build /root/treeroot-ops/bbrx/运行内核/源码提交/build.json --backup /var/backups/treeroot/完整备份.tar.gz
+python3 /root/treeroot-ops/bbrx.py status
+# 通过原有 VMess 节点从客户端实测出口、网页和下载，确认改善后：
+python3 /root/treeroot-ops/bbrx.py confirm --snapshot /var/backups/treeroot/bbrx-时间戳/state.json
+systemctl is-enabled treeroot-bbrx
+systemctl is-active treeroot-bbrx
+```
+
+`trial` 先保存原算法、原持久化文件和服务状态，并建立 10 分钟自动回退定时器，
+再加载模块和切换；加载失败立即回退。`confirm` 才写入并启用
+`/etc/systemd/system/treeroot-bbrx.service`，确认成功后撤销定时器。
+单次构建配置使用 `bbrx_floor_mbps=1`，降低对原本只有几 Mbps 线路的启动过冲；
+不启用上游默认关闭的补偿开关。构建目录包含锁定源码、许可证、模块和 `build.json`。
+
+开机服务先检查当前内核和模块哈希，再加载模块并设置算法。**内核升级后必须重编译**；
+若模块不匹配、丢失或加载失败，保留正常内核默认算法，不阻断网站和代理启动。
+已安装但尚未启动的其他内核未经过 BBRx 验证；不要为了启用 BBRx 重启服务器。
+当前不使用 DKMS，也不向通用 sysctl 文件写入一个可能在新内核不存在的算法。
+
+手动回退（使用同一次试运行返回的快照）：
+
+```bash
+python3 /root/treeroot-ops/bbrx.py rollback --snapshot /var/backups/treeroot/bbrx-时间戳/state.json
+```
+
+回退恢复原默认算法和启动配置，保留最新数据库、用户、日志及内核模块。
+不强制卸载模块或断开用户连接：**切换仅影响新建 TCP 连接**，旧连接继续使用原算法，
+客户端断开重连后才全部应用新算法。完整备份额外保存 `network/` 下的脚本、锁定配置、
+安装记录和启动单元用于审计；迁移脚本不会把内核专属模块或服务盲目恢复到新机器，
+需在新机另行构建和验证。
+
+BBRx 只能缓解丢包下的吞吐下降，不会修复运营商线路或消除物理往返延迟。
+性能记录见 `docs/NETWORK-20261111.md`，不能把单次测速当作长期带宽保证。
+
 ## 单账号额度与带宽限制
 
 `limits.py` 使用 Python 标准库提供仅监听本机的认证 SOCKS5 TCP/UDP 中继，不增加生产 pip 依赖。Xray 保留 VMess/WebSocket/TLS 入站、原凭据与统计，按入站用户转入各自 SOCKS 出站；既有 API 路由与私网拦截优先，末尾兜底拒绝未知用户，限流服务不可用时不会回退直连。

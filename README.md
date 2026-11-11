@@ -22,6 +22,7 @@ python3 ops/manage.py update       # 修改代码后发布，自动先备份
 | [AGENTS.md](AGENTS.md) | 给后续 Codex/开发者的维护规则和部署入口 |
 | [服务器信息](docs/SERVER.md) | IP、DNS、端口、服务、目录、权限、SSH 指纹 |
 | [更新与备份](docs/DEPLOYMENT.md) | 发布程序、依赖变更、备份和故障恢复 |
+| [BBRx 线路对照记录](docs/NETWORK-20261111.md) | 公司网络测速、固定源码与效果边界 |
 | [换服务器](docs/MIGRATION.md) | 备份、恢复新机、测试、切 DNS、回退 |
 | `deploy/server.json` | 当前 IP、域名、DNS RecordId、固定软件版本 |
 | `private/服务器访问说明.md` | 服务器登录方式与交付时密码；只在本机查看 |

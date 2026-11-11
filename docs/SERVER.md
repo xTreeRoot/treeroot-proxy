@@ -96,6 +96,17 @@ aliyun alidns DescribeDomainRecordInfo --profile treeroot-dns --RecordId 2116072
 
 同机还运行独立的 SocialCrawlerHub 项目：Caddy 的 `get.treeroot.top` 站点反向代理到 `127.0.0.1:3789`；当前发布目录由 `/opt/SocialCrawlerHub` 链接到 `/opt/socialcrawlerhub/releases/` 下的版本目录。项目服务为 `socialcrawlerhub.service` 和 `socialcrawlerhub-browser.service`，数据库为 `mysql.service`。TreeRoot 面板仅读取这些单元的运行状态及 systemd 工作目录，不发布 SocialCrawlerHub 应用代码或配置。
 
+## TCP 拥塞控制
+
+2026-11-11 已在当前 `6.8.0-48-generic` 内核启用 `bbrx`，队列仍为 `fq_codel`。
+源码固定为 `nivrrex/bbrx` 的 `7da9f7397f092d64a5837be624ff023821fd0929`，
+`bbrx_floor_mbps=1`。构建与模块保存在 `/root/treeroot-ops/bbrx/内核版本/源码提交/`，
+启动服务为 `/etc/systemd/system/treeroot-bbrx.service`，锁定配置见 `deploy/bbrx.json`。
+
+只影响新建 TCP 连接；现有连接不强制断开。内核升级后须重新构建；模块不匹配时开机保留
+内核默认算法，不阻断业务启动。部署、自动回退与手动撤销见 `docs/DEPLOYMENT.md`，
+测速证据见 `docs/NETWORK-20261111.md`。
+
 ## SSH 和私密资料
 
 已核验的 ED25519 主机指纹：
