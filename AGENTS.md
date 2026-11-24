@@ -35,7 +35,7 @@
 - **实际代理协议为 VMess + WebSocket + TLS，公网端口 443。**
 - `xray.service` 的旧 Description 写着 VLESS REALITY，这是历史名称，不能据此生成客户端配置。
 - Caddy 终止 TLS，把 WebSocket 转到 `127.0.0.1:10001`，把管理网站和订阅转到 `127.0.0.1:19991`。
-- Go 面板（`gopanel/`）提供管理、订阅、采集和每日备份，前端使用静态 HTML/CSS/JS。SQLite 写入经有界内存队列串行提交，连接明细在数据库分页，查询只选需要的列。
+- Go 面板（`gopanel/`）提供管理、订阅、采集和每日备份，前端源码位于 `frontend/`，使用 React + TypeScript + Vite，构建后仍由 Go 提供静态资源。SQLite 写入经有界内存队列串行提交，连接明细在数据库分页，查询只选需要的列。
 - Xray 的 Handler/Stats/Logger API 为 `127.0.0.1:10085`，Caddy admin 为 `127.0.0.1:2019`；均不可暴露到公网。
 - Go 面板进程在 `127.0.0.1:10002` 提供认证 SOCKS5 TCP/UDP 中继，按 Xray 用户路由执行共享带宽和总/日额度。旧 `treeroot-limits.service` 仅用于 Python 版本回退。
 - 限制配置存入新增 `user_limits`；`limit_usage` / `limit_daily` 是额度账本。首次切流前 `limits.activate` 从已有流量建立基线；切流后以中继实际授予的字节计额，不能再把已被 Xray 预读的缓冲字节重复加入。有限额度先持久化再转发，服务异常不回退直连；回退须同时恢复 Xray 路由，保留新增表和最新数据库。
@@ -68,6 +68,9 @@
 ```bash
 cd /Users/xugenyin/file/treeroot-proxy
 python3 ops/manage.py status
+npm --prefix frontend ci
+npm --prefix frontend run build
+npm --prefix frontend test
 mkdir -p work
 (cd gopanel && go test ./... && go build -trimpath -o ../work/treeroot-gopanel .)
 TREEROOT_GO_PANEL_BIN="$PWD/work/treeroot-gopanel" .venv/bin/python -m unittest discover -s tests -v
@@ -76,8 +79,9 @@ python3 ops/manage.py go-update
 python3 ops/manage.py status
 ```
 
-`go-update` 在生产库副本验证候选程序，再创建完整备份并替换 Go 程序和 Web 资源。重启面板时，活动代理连接会重连。发布后检查服务、SQLite 和资源 MIME，并下载备份至 `private/backups/`。失败时恢复旧程序和单元，保留最新数据库。
+`go-update` 先自动构建 React 前端，在生产库副本验证候选程序，再创建完整备份并替换 Go 程序和 Web 资源。重启面板时，活动代理连接会重连。发布后检查服务、SQLite 和资源 MIME，并下载备份至 `private/backups/`。失败时恢复旧程序和单元，保留最新数据库。
 
+- 前端修改 `frontend/src/` 后运行 `npm --prefix frontend run build`，根目录 `index.html`、`app.js`、`style.css` 是生成产物，不手工修改。依赖用 `npm ci` 按锁文件安装，生产服务器无需 Node.js。旧 `egress.js` / `egress.css` 保留兼容历史发布包，但新入口不加载。源码 Release 必须包含前端源码与锁文件，排除依赖和构建临时目录。
 - 发布白名单以 `ops/remote.py` 的 `GO_PACKAGE` 为准。三份电脑端连接器文件与生产逐字节核对，保留已安装连接器的配对、凭据和协议。
 - 本地 `ops/`、`docs/`、`AGENTS.md` 和 `private/` 不进入 Web 程序发布包。运维脚本经 SSH 单独上传到 root 私有目录。
 - 更新必须保留用户 ID、UUID、token、启用状态、管理员密码、累计流量和域名历史。

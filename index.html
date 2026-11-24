@@ -1,142 +1,20 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="color-scheme" content="dark"><title>TreeRoot</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23111a29'/%3E%3Ctext x='11' y='45' font-family='sans-serif' font-size='40' font-weight='bold' fill='%235addc0'%3Etr%3C/text%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/assets/style.css?v=20261124-2">
-  <link rel="stylesheet" href="/assets/egress.css?v=20261124-2">
-  <script defer src="/assets/echarts.min.js?v=5.6.0"></script><script defer src="/assets/app.js?v=20261124-2"></script>
-</head>
-<body>
-<div id="login" class="login-screen">
-  <form id="login-form" class="login-card" aria-label="登录 TreeRoot">
-    <div class="brand-mark">tr<span>.</span></div>
-    <label for="username">管理员账号</label><input id="username" autocomplete="username" required value="admin">
-    <label for="password">密码</label><input id="password" type="password" autocomplete="current-password" required>
-    <p id="login-error" class="error" role="alert"></p><button class="button primary full" type="submit">登录 <span>→</span></button>
-  </form>
-</div>
-<div id="app" class="app hidden">
-  <aside class="sidebar">
-    <a class="brand" href="#overview" data-page="overview" aria-label="TreeRoot 首页"><span class="brand-mark" aria-hidden="true">tr<span>.</span></span></a>
-    <select id="mobile-page" aria-label="切换页面"></select>
-    <nav id="desktop-nav" aria-label="主导航">
-      <a class="nav-item active" data-page="overview" href="#overview" aria-current="page">运行概览</a>
-      <a class="nav-item" data-page="egress-dashboard" href="#egress-dashboard">出口流量大盘</a>
-      <a class="nav-item" data-page="proxy-dashboard" href="#proxy-dashboard">代理流量大盘</a>
-      <a class="nav-item" data-page="users" href="#users">用户与订阅</a>
-      <a class="nav-item" data-page="activity" href="#activity">访问记录</a>
-      <a class="nav-item" data-page="egress" href="#egress">电脑出口</a>
-      <a class="nav-item" data-page="egress-records" href="#egress-records" aria-label="电脑出口详细记录">出口明细</a>
-      <a class="nav-item" data-page="settings" href="#settings">管理设置</a>
-    </nav>
-    <div class="sidebar-info">
-      <div id="health" class="server-card collector-card" role="status"><span class="server-orbit">≋</span><div>采集状态<small id="health-text">连接中</small></div><span class="dot"></span></div>
-    </div>
-    <div class="sidebar-foot"><div class="avatar">A</div><div><b id="account-name">admin</b></div><button id="logout" class="icon-button" aria-label="退出登录">↗</button></div>
-  </aside>
-  <main id="workspace" tabindex="-1">
-    <div class="content">
-      <section id="page-overview" class="page">
-        <div class="overview-scroll scroll-region">
-          <article class="panel resource-panel" aria-label="服务器资源">
-            <div class="panel-heading"><span id="resource-status" class="resource-status" role="status">正在获取</span></div>
-            <div class="resource-grid">
-              <div class="resource-item"><div class="resource-label">CPU 使用率<span id="cpu-cores">—</span></div><div id="cpu-usage" class="resource-value">—</div><meter id="cpu-meter" min="0" max="100" value="0" aria-label="CPU 使用率" hidden></meter><div id="cpu-note" class="resource-note">—</div></div>
-              <div class="resource-item"><div class="resource-label">内存使用率</div><div id="memory-usage" class="resource-value">—</div><meter id="memory-meter" min="0" max="100" value="0" aria-label="内存使用率" hidden></meter><div id="memory-note" class="resource-note">—</div></div>
-              <div class="resource-item"><div class="resource-label">磁盘使用率</div><div id="disk-usage" class="resource-value">—</div><meter id="disk-meter" min="0" max="100" value="0" aria-label="磁盘使用率" hidden></meter><div id="disk-note" class="resource-note">—</div></div>
-              <div class="resource-item"><div class="resource-label">持续运行</div><div id="server-uptime" class="resource-value">—</div></div>
-            </div>
-          </article>
-          <div class="chart-grid server-panels">
-            <article class="panel" aria-label="服务运行状态"><div id="server-services" class="service-grid"><div class="empty">正在获取服务状态</div></div></article>
-          </div>
-          <article class="panel" aria-label="服务器信息"><div id="server-details" class="server-details"><div class="empty">正在获取服务器信息</div></div></article>
-
-        </div>
-      </section>
-      <section id="page-egress-dashboard" class="page hidden">
-        <div class="overview-scroll scroll-region">
-          <section class="egress-dashboard" aria-label="出口流量大盘">
-            <div class="filter-bar"><select id="egress-overview-device" aria-label="筛选电脑"><option value="">全部电脑</option></select><select id="egress-overview-hours" aria-label="趋势与用量范围" autocomplete="off"><option value="24" selected>最近 24 小时</option><option value="168">最近 7 天</option></select></div>
-            <div id="egress-overview-status" class="egress-overview-status muted" role="status">正在获取出口统计</div>
-            <div class="metric-grid egress-headline-grid">
-              <article class="metric"><div class="metric-label">累计出口流量</div><div class="metric-value" id="egress-total-traffic">—</div><div class="metric-note" id="egress-total-breakdown">—</div></article>
-              <article class="metric"><div class="metric-label">最近 24 小时</div><div class="metric-value" id="egress-day-traffic">—</div><div class="metric-note" id="egress-day-breakdown">—</div></article>
-              <article class="metric"><div class="metric-label">启用电脑</div><div class="metric-value" id="egress-enabled">—</div><div class="metric-note" id="egress-online-note">—</div></article>
-              <article class="metric"><div class="metric-label">24 小时连接数</div><div class="metric-value" id="egress-connections">—</div><div class="metric-note" id="egress-failed">—</div></article>
-              <article class="metric"><div class="metric-label">实时上传</div><div class="metric-value" id="egress-speed-upload">—</div><div class="metric-note egress-live-note"></div></article>
-              <article class="metric"><div class="metric-label">实时下载</div><div class="metric-value" id="egress-speed-download">—</div><div class="metric-note egress-live-note"></div></article>
-            </div>
-            <div class="chart-grid">
-              <article class="panel"><div class="panel-heading"><span id="egress-trend-range" class="tag">每小时</span></div><div id="egress-traffic-chart" class="traffic-chart" role="img" aria-label="电脑出口上传和下载流量趋势"></div><p id="egress-trend-empty" class="egress-chart-note muted" hidden>暂无数据</p></article>
-              <article class="panel"><div id="egress-domain-list" class="domain-list"><div class="empty">等待统计</div></div></article>
-            </div>
-            <article class="panel"><div class="panel-heading"><button id="egress-overview-records" class="text-button">查看详细记录 →</button></div><div id="egress-device-usage" class="table-wrap scroll-region" tabindex="0" aria-label="各电脑出口流量统计"><div class="empty">等待统计</div></div></article>
-          </section>
-        </div>
-      </section>
-      <section id="page-proxy-dashboard" class="page hidden">
-        <div class="overview-scroll scroll-region">
-          <div class="filter-bar"><select id="overview-user-filter" aria-label="筛选用户"><option value="">全部用户</option></select></div>
-          <div class="metric-grid">
-            <article class="metric"><div class="metric-label">累计代理流量</div><div class="metric-value" id="total-traffic">—</div><div class="metric-note" id="total-breakdown">—</div></article>
-            <article class="metric"><div class="metric-label">最近 24 小时</div><div class="metric-value" id="day-traffic">—</div></article>
-            <article class="metric"><div class="metric-label">启用用户</div><div class="metric-value" id="active-users">—</div></article>
-            <article class="metric"><div class="metric-label">24 小时连接数</div><div class="metric-value" id="connections">—</div></article>
-            <article class="metric"><div class="metric-label">实时上传</div><div class="metric-value" id="speed-upload">—</div></article>
-            <article class="metric"><div class="metric-label">实时下载</div><div class="metric-value" id="speed-download">—</div></article>
-          </div>
-
-          <div class="chart-grid">
-            <article class="panel"><div class="panel-heading traffic-trend-heading"><span id="traffic-trend-range" class="tag">最近 24 小时 · 按小时</span></div><div class="traffic-trend-filters" role="group" aria-label="流量趋势年月日筛选"><label>年份<select id="traffic-year" aria-label="趋势年份"><option value="">最近 24 小时</option></select></label><label>月份<select id="traffic-month" aria-label="趋势月份" disabled><option value="">全年</option></select></label><label>日期<select id="traffic-day" aria-label="趋势日期" disabled><option value="">全月</option></select></label><button id="traffic-trend-reset" class="text-button" type="button">重置</button></div><div id="traffic-chart" class="traffic-chart" role="img" aria-label="最近24小时上传和下载流量"></div></article>
-            <article class="panel"><div id="domain-list" class="domain-list"></div></article>
-          </div>
-          <article class="panel usage-panel"><div class="panel-heading"><div class="panel-actions"><button id="overview-reset" class="text-button hidden">全部用户</button><button class="text-button" data-page="users">管理用户 →</button></div></div><div id="usage-cards" class="usage-cards"></div><nav id="usage-pagination" class="pagination" aria-label="用户使用情况分页"></nav></article>
-
-        </div>
-      </section>
-      <section id="page-users" class="page hidden">
-        <article class="panel list-panel"><div class="users-toolbar"><select id="users-user-filter" aria-label="筛选用户"><option value="">全部用户</option></select><button class="button primary" id="add-user" type="button">新增用户</button></div><div class="scroll-region"><div id="user-cards" class="user-cards"></div></div><nav id="users-pagination" class="pagination" aria-label="用户与订阅分页"></nav></article>
-      </section>
-      <section id="page-activity" class="page hidden">
-        <article class="panel list-panel"><form id="activity-search-form" class="search-form" role="search" aria-label="访问记录搜索"><label class="search-field" for="activity-user-filter">用户<select id="activity-user-filter"><option value="">全部用户</option></select></label><label class="search-field" for="domain-search">域名 / IP<input id="domain-search" type="search"></label><div class="search-actions"><button class="button primary" type="submit">搜索</button><button class="button subtle" type="reset">重置</button></div></form><div id="activity-table" class="table-wrap scroll-region" tabindex="0" aria-label="访问记录表格"></div><nav id="activity-pagination" class="pagination" aria-label="访问记录分页"></nav></article>
-      </section>
-      <section id="page-egress" class="page hidden">
-        <article class="panel list-panel egress-panel">
-          <div class="panel-heading"><div><span id="egress-current-driver-version" class="tag">当前驱动版本：加载中</span></div><div class="egress-heading-actions"><button id="egress-blacklist-open" class="button subtle">黑名单管理</button><button id="egress-trash" class="button subtle">已删除设备</button><button id="add-egress" class="button primary">添加这台电脑</button></div></div>
-          <div id="egress-devices" class="scroll-region egress-devices" aria-live="polite"></div>
-        </article>
-      </section>
-      <section id="page-egress-records" class="page hidden">
-        <article class="panel list-panel egress-records-panel">
-          <form id="egress-records-search-form" class="search-form" role="search" aria-label="电脑出口记录搜索">
-            <label class="search-field" for="egress-records-device"><span>电脑</span><select id="egress-records-device"><option value="">全部电脑</option></select></label>
-            <label class="search-field" for="egress-records-kind"><span>记录类型</span><select id="egress-records-kind"><option value="">全部类型</option><option value="request">出口访问</option><option value="device">设备事件</option></select></label>
-            <label class="search-field" for="egress-records-outcome"><span>结果</span><select id="egress-records-outcome"><option value="">全部结果</option><option value="success">成功</option><option value="failed">失败</option></select></label>
-            <label class="search-field" for="egress-records-hours"><span>统计范围</span><select id="egress-records-hours"><option value="168">最近 7 天</option><option value="24">最近 24 小时</option></select></label>
-            <label class="search-field" for="egress-records-search"><span>域名 / IP</span><input id="egress-records-search" type="search" maxlength="253"></label>
-            <div class="search-actions"><button class="button primary" type="submit">搜索</button><button class="button subtle" type="reset">重置</button></div>
-          </form>
-          <div id="egress-records-table" class="table-wrap scroll-region" tabindex="0" aria-label="电脑出口详细记录表格"></div>
-          <nav id="egress-records-pagination" class="pagination" aria-label="电脑出口详细记录分页"></nav>
-        </article>
-      </section>
-      <section id="page-settings" class="page hidden"><div class="scroll-region"><article class="panel password-panel"><form id="password-form" class="settings-form"><label for="old-password">原密码</label><input id="old-password" type="password" autocomplete="current-password" required><label for="new-password">新密码</label><input id="new-password" type="password" autocomplete="new-password" required><button class="button primary" type="submit">更新密码</button></form></article></div></section>
-    </div>
-  </main>
-</div>
-<dialog id="user-dialog" aria-label="用户名称"><form id="user-form"><div class="modal-heading"><button class="icon-button close-dialog" type="button" aria-label="关闭">×</button></div><label for="user-name">用户名称</label><input id="user-name" maxlength="64" required autofocus><div class="modal-actions"><button type="button" class="button subtle close-dialog">取消</button><button type="submit" class="button primary">保存用户</button></div></form></dialog>
-<dialog id="limits-dialog" aria-label="流量限制"><form id="limits-form"><div class="modal-heading"><button class="icon-button close-dialog" type="button" aria-label="关闭">×</button></div><div class="limits-usage"><div><span>累计已使用</span><b id="limits-total-used">—</b></div><div><span>今日已使用</span><b id="limits-daily-used">—</b></div></div><label for="limit-total_bytes">总流量上限（GB）</label><input id="limit-total_bytes" type="number" inputmode="decimal" min="0" step="any" max="8388607" placeholder="不限"><label for="limit-daily_bytes">单日流量上限（GB）</label><input id="limit-daily_bytes" type="number" inputmode="decimal" min="0" step="any" max="8388607" placeholder="不限"><label for="limit-speed_bps">网速上限（Mbps）</label><input id="limit-speed_bps" type="number" inputmode="decimal" min="0" step="any" max="1000000" placeholder="不限"><p id="limits-status" class="limits-help muted" role="status"></p><div class="modal-actions limits-actions"><button id="limits-clear" class="text-button" type="button">清除全部上限</button><button class="button subtle close-dialog" type="button">取消</button><button class="button primary" type="submit">保存限制</button></div></form></dialog>
-<dialog id="subscription-dialog" aria-label="订阅链接">
-  <div class="modal-heading"><button class="icon-button close-dialog" aria-label="关闭">×</button></div>
-  <label for="clash-link">Clash</label><div class="copy-field"><input id="clash-link" readonly><button id="copy-clash" class="button subtle" aria-label="复制 Clash 订阅">复制</button></div>
-  <label for="rocket-link">Shadowrocket</label><div class="copy-field"><input id="rocket-link" readonly><button id="copy-rocket" class="button subtle" aria-label="复制 Shadowrocket 订阅">复制</button></div>
-</dialog>
-  <dialog id="confirm-dialog" aria-label="确认操作"><form method="dialog" class="modal-actions"><button class="button subtle" value="cancel" autofocus>取消</button><button id="confirm-action" class="button danger" value="confirm">确认</button></form></dialog>
-<div id="toast" role="status" aria-live="polite"></div>
-<dialog id="egress-blacklist-dialog" aria-label="出口黑名单"><div class="egress-blacklist-modal"><div class="modal-heading"><button id="egress-blacklist-close" class="icon-button" type="button" aria-label="关闭黑名单管理">×</button></div><div class="egress-blacklist-dialog-body"><div class="egress-blacklist-heading"><span id="egress-blacklist-status" class="tag">正在获取</span></div><form id="egress-blacklist-form" class="egress-blacklist-form"><label for="egress-blacklist-host">主机名<input id="egress-blacklist-host" maxlength="253" required autocomplete="off"></label><div class="egress-blacklist-form-actions"><button class="button primary" type="submit">添加规则</button><button id="egress-blacklist-cancel" class="button subtle" type="button" hidden>取消编辑</button></div></form><div id="egress-blacklist-list" class="egress-blacklist-list" aria-live="polite"><div class="empty">正在获取黑名单</div></div></div></div></dialog>
-<dialog id="egress-dialog" aria-label="添加电脑"><form id="egress-form"><div class="modal-heading"><button class="icon-button close-dialog" type="button" aria-label="关闭">×</button></div><label for="egress-name">电脑名称</label><input id="egress-name" maxlength="64" required autofocus><div class="modal-actions"><button class="button subtle close-dialog" type="button">取消</button><button class="button primary" type="submit">添加电脑</button></div></form></dialog>
-<script defer src="/assets/egress.js?v=20261124-2"></script>
-</body></html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#465fff" />
+    <title>TreeRoot</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='12' fill='%23465fff'/%3E%3Cpath d='M13 31V21m11 10V14m11 17V19' stroke='white' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E"
+    />
+    <script defer src="/assets/echarts.min.js?v=5.6.0"></script>
+    <script type="module" crossorigin src="/assets/app.js?v=129d17a9c3be"></script>
+    <link rel="stylesheet" crossorigin href="/assets/style.css?v=129d17a9c3be">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

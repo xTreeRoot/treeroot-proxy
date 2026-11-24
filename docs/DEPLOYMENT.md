@@ -7,6 +7,9 @@
 ```bash
 cd /Users/xugenyin/file/treeroot-proxy
 python3 ops/manage.py status
+npm --prefix frontend ci
+npm --prefix frontend run build
+npm --prefix frontend test
 mkdir -p work
 (cd gopanel && go test ./... && go build -trimpath -o ../work/treeroot-gopanel .)
 TREEROOT_GO_PANEL_BIN="$PWD/work/treeroot-gopanel" .venv/bin/python -m unittest discover -s tests -v
@@ -17,12 +20,16 @@ python3 ops/manage.py status
 
 一次 `go-update` 会完成：
 
-1. 构建 Linux amd64 静态二进制，按白名单打包。校验三份连接器源码与线上逐字节一致，不替换它们。
+1. 用锁文件安装好的本地 npm 依赖构建 React 前端，更新根目录三个 Web 产物；再构建 Linux amd64 静态二进制，按白名单打包。校验三份连接器源码与线上逐字节一致，不替换它们。
 2. 在生产库副本运行候选程序，检查受保护接口、备份、身份、会话及账本；通过后创建完整备份。
 3. 停止面板及旧限流，替换 Go 程序、Web 资源和面板/备份单元。Xray、Caddy 和 SSH 不重启；活动代理连接会重连。
 4. 检查服务、SQLite、SOCKS5 和静态资源 MIME。失败恢复原程序和单元，保留最新数据库；成功下载完整备份并验证 SHA256。
 
 发布包不会包含 `private/`、数据库、生产配置或运维文档，也不会改 DNS。只有修改文档或 `ops/` 时，不需要为了文档发布应用；运维助手会在下一次调用时经 SSH 上传。
+
+前端源码在 `frontend/src/`，页面为 React/TypeScript，样式使用项目内 CSS 变量；`frontend/package-lock.json` 固定依赖。不要手改生成的根目录 `app.js`、`style.css`、`index.html`。发布机只接收构建结果，不安装 Node.js 或 `node_modules`。源码备份包包含 `frontend/` 源码和锁文件，排除 `node_modules/`、`dist/`、测试覆盖率与私密文件。首次安装或依赖变化后先执行 `npm --prefix frontend ci`；缺少依赖时构建失败会中止发布。旧 `egress.js` / `egress.css` 未被新入口加载。
+
+UI 修改还需在 Codex 内浏览器验证桌面和手机布局、控制台、静态资源、筛选分页、键盘/弹窗退出；交互写入使用 `tests/ui_fixture.py` 的独立 Go 测试实例，禁止拿线上真实用户做重置、改密或删除测试。
 
 旧 Python 主机仍可用 `update`；Go 上线后不要用它更新。回退保留新增表与最新业务数据。
 

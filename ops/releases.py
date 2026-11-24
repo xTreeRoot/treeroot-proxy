@@ -40,6 +40,10 @@ def source_allowed(name):
         return name in TOP_LEVEL
     if path.parts[0] == 'gopanel':
         return len(path.parts) == 2 and (path.suffix == '.go' or path.name in ('go.mod', 'go.sum'))
+    if path.parts[0] == 'frontend':
+        if any(part in ('node_modules', 'dist', 'coverage', 'private', '.git') or part.startswith('.') for part in path.parts):
+            return False
+        return path.suffix in ('.ts', '.tsx', '.css', '.html', '.json', '.mjs', '.md')
     return (path.parts[0] in SOURCE_DIRS and '__pycache__' not in path.parts
             and path.suffix in ('.py', '.md', '.json'))
 

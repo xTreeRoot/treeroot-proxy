@@ -38,7 +38,13 @@ def scp(config, source, destination):
     return ['scp', '-q', *ssh_options(config), '-P', str(config['ssh_port']), source, destination]
 
 
+def build_frontend():
+    if (ROOT / 'frontend/package.json').is_file():
+        subprocess.run(['npm', 'run', 'build'], cwd=ROOT / 'frontend', check=True)
+
+
 def package(destination):
+    build_frontend()
     with tarfile.open(destination, 'w:gz') as archive:
         for name in FILES:
             path = ROOT / name
@@ -48,6 +54,7 @@ def package(destination):
 
 
 def package_go(destination):
+    build_frontend()
     binary = destination.parent / GO_BINARY
     subprocess.run(['go', 'build', '-trimpath', '-ldflags=-s -w', '-o', str(binary), '.'],
                    cwd=ROOT / 'gopanel', check=True, env=dict(os.environ, CGO_ENABLED='0', GOOS='linux', GOARCH='amd64'))

@@ -10,10 +10,11 @@
 cd /Users/xugenyin/file/treeroot-proxy
 python3 ops/manage.py status       # 检查服务、数据库和静态资源
 python3 ops/manage.py backup       # 完整备份，并下载到本机
-python3 ops/manage.py go-update    # 编译、预验证、备份并发布
+npm --prefix frontend ci          # 首次安装或锁文件变化后执行
+python3 ops/manage.py go-update    # 构建 React/Go、预验证、备份并发布
 ```
 
-本机需要 Python 3.12+ 与系统自带 SSH/SCP；运维脚本没有额外 pip 依赖。更新 DNS 时还需要已登录的阿里云 CLI。生产 FastAPI 依赖固定在 `requirements.lock`。
+本机需要 Python 3.12+、Go（版本见 `gopanel/go.mod`）、Node.js 20.19+ 或 22.12+、npm 与系统自带 SSH/SCP；运维脚本没有额外 pip 依赖。更新 DNS 时还需要已登录的阿里云 CLI。生产运行 Go 二进制与构建后的静态资源，不需要 Node.js；旧 Python 后端的回退依赖固定在 `requirements.lock`。
 
 ## 文档入口
 
@@ -48,13 +49,20 @@ python3 ops/manage.py go-update    # 编译、预验证、备份并发布
 
 ## 项目结构与验证
 
-`gopanel/` 是 Go 服务端，包含管理、订阅、采集、限流、出口接口及每日备份。Web UI 无需构建；电脑端连接器与 SSH 隧道不变。原 Python 后端保留用于回退和兼容测试。
+`gopanel/` 是 Go 服务端，包含管理、订阅、采集、限流、出口接口及每日备份。`frontend/` 是 React + TypeScript + Vite 前端，按 [TailAdmin](https://github.com/TailAdmin/free-react-tailwind-admin-dashboard) 的视觉方向重做八个页面，使用 React Query、Lucide 与本地 ECharts。支持明暗主题、收起侧栏、手机抽屉导航、保留筛选与分页状态，复用原有 cookie/CSRF API。电脑端连接器与 SSH 隧道不变；原 Python 后端保留用于回退和兼容测试。
+
+`npm --prefix frontend run build` 先做 TypeScript 检查，再构建并生成根目录的 `index.html`、`app.js`、`style.css`；缓存版本由内容哈希生成。这三个文件是发布产物，请修改 `frontend/src/` 后重新构建。`go-update` 打包前自动构建前端，避免发布旧资源。字体、图标和图表均不依赖外部 CDN。旧 `egress.js` / `egress.css` 仅保留在原发布白名单以兼容历史包，React 页面不再加载它们。
 
 ```bash
+npm --prefix frontend ci
+npm --prefix frontend run build
+npm --prefix frontend test
 mkdir -p work
 (cd gopanel && go test ./... && go build -trimpath -o ../work/treeroot-gopanel .)
 TREEROOT_GO_PANEL_BIN="$PWD/work/treeroot-gopanel" .venv/bin/python -m unittest discover -s tests -v
 ```
+
+浏览器验收可运行 `.venv/bin/python tests/ui_fixture.py`，在 `http://localhost:19994` 使用脚本内的测试账号；它在 `work/` 创建独立临时数据库，运行实际 Go 接口，不读取或改动生产数据。开发热更新用 `npm --prefix frontend run dev`，默认代理本机 `19992`，可先将该端口改为自己的测试后端端口。
 
 2026-10-30 已完成线上完整备份、备份哈希与 SQLite 校验，以及同版本真实更新：用户身份保留、流量不减少、Xray/Caddy 不重启。新机迁移脚本尚未在另一台 VPS 实机演练，迁移时仍须按文档先验证新机。
 
