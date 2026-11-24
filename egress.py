@@ -145,6 +145,7 @@ class Egress:
               detail TEXT NOT NULL DEFAULT '',UNIQUE(device_id,event_key))''')
             db.execute('CREATE INDEX IF NOT EXISTS egress_events_device_id ON egress_events(device_id,id DESC)')
             db.execute('CREATE INDEX IF NOT EXISTS egress_events_time ON egress_events(ts)')
+            db.execute("CREATE INDEX IF NOT EXISTS egress_request_cursor ON egress_events(device_id,id) WHERE kind='request'")
             db.execute('''CREATE TABLE IF NOT EXISTS egress_totals(
                 device_id TEXT PRIMARY KEY REFERENCES egress_devices(id),
                 upload INTEGER NOT NULL,download INTEGER NOT NULL,connections INTEGER NOT NULL,
@@ -167,20 +168,15 @@ class Egress:
         """Use an event ID checkpoint so retries, restarts and retention never recount bytes."""
         if not db.in_transaction:
             db.execute('BEGIN IMMEDIATE')
-        checkpoints = db.execute('''SELECT d.id,COALESCE(t.last_event_id,0) last_event_id
-            FROM egress_devices d LEFT JOIN egress_totals t ON t.device_id=d.id'''+
-            (' WHERE d.id=?' if device_id else ''), [device_id] if device_id else []).fetchall()
-        for checkpoint in checkpoints:
-            row = db.execute('''SELECT device_id,SUM(upload) upload,SUM(download) download,
-                COUNT(*) connections,MAX(id) last_event_id,MIN(ts) since FROM egress_events
-                WHERE device_id=? AND id>? AND kind='request' ''',
-                (checkpoint['id'], checkpoint['last_event_id'])).fetchone()
-            if not row['connections']:
-                continue
-            db.execute('''INSERT INTO egress_totals VALUES(?,?,?,?,?,?)
-                ON CONFLICT(device_id) DO UPDATE SET upload=upload+excluded.upload,
-                download=download+excluded.download,connections=connections+excluded.connections,
-                last_event_id=excluded.last_event_id,since=MIN(since,excluded.since)''', tuple(row))
+        db.execute('''INSERT INTO egress_totals(device_id,upload,download,connections,last_event_id,since)
+            SELECT d.id,SUM(e.upload),SUM(e.download),COUNT(*),MAX(e.id),MIN(e.ts)
+            FROM egress_devices d LEFT JOIN egress_totals t ON t.device_id=d.id
+            CROSS JOIN egress_events e
+            WHERE e.device_id=d.id AND e.id>COALESCE(t.last_event_id,0) AND e.kind='request' ''' +
+            (' AND d.id=? ' if device_id else '') + '''GROUP BY d.id
+            ON CONFLICT(device_id) DO UPDATE SET upload=upload+excluded.upload,
+            download=download+excluded.download,connections=connections+excluded.connections,
+            last_event_id=excluded.last_event_id,since=MIN(since,excluded.since)''', [device_id] if device_id else [])
 
     def sample_traffic(self, device_id, traffic, now):
         if traffic is None:
@@ -595,13 +591,12 @@ def install_routes(app, database, authenticated, config, data, root, report_data
             if not row['last_seen'] or now - row['last_seen'] >= 65:
                 manager.disconnected(db, row, now)
                 manager.event(db, row, 'connected')
-            for record in body.records:
-                if now - 7 * 86400 <= record.ts <= now + 300:
-                    db.execute('''INSERT OR IGNORE INTO egress_events
-                        (event_key,device_id,ts,kind,action,outcome,domain,port,method,upload,download,duration_ms,exit_ip,detail)
-                        VALUES(?,?,?,'request','connection',?,?,?,?,?,?,?,?,?)''',
-                        (record.event_key, device_id, record.ts, record.outcome, record.domain, record.port,
-                         record.method, record.upload, record.download, record.duration_ms, row['last_ip'] or '', record.detail))
+            db.executemany('''INSERT OR IGNORE INTO egress_events
+                (event_key,device_id,ts,kind,action,outcome,domain,port,method,upload,download,duration_ms,exit_ip,detail)
+                VALUES(?,?,?,'request','connection',?,?,?,?,?,?,?,?,?)''',
+                ((record.event_key, device_id, record.ts, record.outcome, record.domain, record.port,
+                  record.method, record.upload, record.download, record.duration_ms, row['last_ip'] or '', record.detail)
+                 for record in body.records if now - 7 * 86400 <= record.ts <= now + 300))
             db.execute('''UPDATE egress_devices SET last_seen=?,driver_version=COALESCE(?,driver_version)
                           WHERE id=?''', (now, body.driver_version, device_id))
             manager.sync_totals(db, device_id)

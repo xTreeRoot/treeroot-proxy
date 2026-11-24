@@ -38,6 +38,8 @@ def source_allowed(name):
         return False
     if len(path.parts) == 1:
         return name in TOP_LEVEL
+    if path.parts[0] == 'gopanel':
+        return len(path.parts) == 2 and (path.suffix == '.go' or path.name in ('go.mod', 'go.sum'))
     return (path.parts[0] in SOURCE_DIRS and '__pycache__' not in path.parts
             and path.suffix in ('.py', '.md', '.json'))
 

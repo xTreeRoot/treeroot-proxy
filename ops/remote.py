@@ -2,12 +2,15 @@
 import argparse
 from contextlib import closing
 from datetime import datetime, timezone
+import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import secrets
+import select
 import socket
 import sqlite3
 import subprocess
@@ -25,6 +28,12 @@ FILES = ('app.py', 'app.js', 'index.html', 'style.css', 'echarts.min.js', 'backu
          'egress_proxy.py', 'limits.py')
 # 保留新增文件前生成的源码归档，旧包仍须通过逐文件清单和哈希校验。
 LEGACY_OPTIONAL_SOURCE_FILES = {'connector_version.py', 'limits.py'}
+GO_BINARY = 'treeroot-go'
+GO_ASSETS = ('index.html', 'app.js', 'style.css', 'egress.js', 'egress.css',
+             'echarts.min.js', 'subscription-template.json')
+CONNECTOR = ('connector.py', 'connector_version.py', 'egress_proxy.py')
+GO_PACKAGE = (GO_BINARY, *GO_ASSETS, *CONNECTOR)
+UNITS_DIR = Path('/etc/systemd/system')
 UNITS = ('xray.service', 'caddy.service', 'treeroot-panel.service',
          'treeroot-backup.service', 'treeroot-backup.timer', 'treeroot-limits.service')
 
@@ -38,6 +47,11 @@ def copy_file(source, destination):
     if source.exists():
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
+
+
+def go_active():
+    unit = UNITS_DIR / 'treeroot-panel.service'
+    return unit.exists() and f'ExecStart={APP / GO_BINARY}' in unit.read_text()
 
 
 def digest(path):
@@ -68,10 +82,13 @@ def backup(public_ip, stop_services=False):
     try:
         # Close public connections before the last statistics poll.
         run('systemctl', 'stop', 'caddy', 'treeroot-panel')
-        run('runuser', '-u', 'treeroot', '--', str(APP / 'venv/bin/python'), '-c',
-            'import app; app.collect_stats(); app.collect_access()', cwd=APP)
+        if go_active():
+            run('runuser', '-u', 'treeroot', '--', str(APP / GO_BINARY), '-final-poll', cwd=APP)
+        else:
+            run('runuser', '-u', 'treeroot', '--', str(APP / 'venv/bin/python'), '-c',
+                'import app; app.collect_stats(); app.collect_access()', cwd=APP)
         run('systemctl', 'stop', 'xray')
-        if 'treeroot-limits' in services:
+        if 'treeroot-limits' in active:
             run('systemctl', 'stop', 'treeroot-limits')
         return create_backup(public_ip, True)
     except BaseException:
@@ -112,7 +129,7 @@ def create_backup(public_ip, stop_services):
                              ('/root/treeroot-ops/bbrx.json', 'bbrx.json'),
                              ('/root/treeroot-ops/bbrx/installed.json', 'installed.json')]:
             copy_file(source, root / 'network' / name)
-        for name in FILES:
+        for name in (*FILES, GO_BINARY):
             copy_file(APP / name, root / 'app' / name)
         if not (root / 'app/requirements.lock').exists():
             freeze = run(str(APP / 'venv/bin/pip'), 'freeze').stdout.splitlines()
@@ -136,25 +153,28 @@ def create_backup(public_ip, stop_services):
     return {'archive': str(target), 'sha256': digest(target), 'stopped': stop_services}
 
 
-def health():
-    response = urllib.request.urlopen('http://127.0.0.1:19991/api/me', timeout=3)
+def health(address='127.0.0.1:19991', assets=None, limits=True):
+    origin = 'http://' + address
+    response = urllib.request.urlopen(origin + '/api/me', timeout=3)
     if response.status != 200:
         raise RuntimeError('Panel health check failed')
     resources = [('style.css', 'text/css'), ('app.js', 'javascript')]
-    html = (APP / 'index.html').read_text()
+    html = ((assets or APP) / 'index.html').read_text()
     for name, mime in [('echarts.min.js', 'javascript'), ('egress.js', 'javascript'), ('egress.css', 'text/css')]:
         if name in html:
             resources.append((name, mime))
     for name, content_type in resources:
-        response = urllib.request.urlopen('http://127.0.0.1:19991/assets/' + name, timeout=3)
+        response = urllib.request.urlopen(origin + '/assets/' + name, timeout=3)
         if response.status != 200 or content_type not in response.headers.get('Content-Type', ''):
             raise RuntimeError('Static resource check failed: ' + name)
-    if Path('/etc/systemd/system/treeroot-limits.service').exists():
+    if limits and (UNITS_DIR / 'treeroot-limits.service').exists():
         with socket.create_connection(('127.0.0.1', 10002), timeout=2):
             pass
 
 
 def update(archive, public_ip):
+    if go_active():
+        raise RuntimeError('The Go service is active; use go-update')
     with tempfile.TemporaryDirectory(prefix='treeroot-release-') as temporary:
         staging = Path(temporary)
         safe_extract(archive, staging, allow=FILES)
@@ -215,12 +235,137 @@ def status():
     services = {}
     for service in ('xray', 'caddy', 'treeroot-panel', 'treeroot-backup.timer'):
         services[service] = run('systemctl', 'is-active', service).stdout.strip()
-    if Path('/etc/systemd/system/treeroot-limits.service').exists():
+    if go_active():
+        services['treeroot-limits'] = 'integrated'
+    elif (UNITS_DIR / 'treeroot-limits.service').exists():
         services['treeroot-limits'] = run('systemctl', 'is-active', 'treeroot-limits').stdout.strip()
     with closing(sqlite3.connect(DATA / 'panel.sqlite3')) as db:
         integrity = db.execute('PRAGMA quick_check').fetchone()[0]
         users, enabled = db.execute('SELECT COUNT(*),SUM(enabled) FROM users').fetchone()
     return {'services': services, 'sqlite': integrity, 'users': users, 'enabled': enabled, 'static_resources': 'ok'}
+
+
+def check_candidate(staging):
+    configuration = json.loads(Path('/etc/treeroot/config.json').read_text())
+    isolated = staging / 'test-data'
+    isolated.mkdir(mode=0o700)
+    path = isolated / 'panel.sqlite3'
+    with closing(sqlite3.connect(DATA / 'panel.sqlite3')) as live, closing(sqlite3.connect(path)) as copy:
+        live.backup(copy)
+    token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+    identity_sql = ("SELECT id,username,password_hash FROM admin ORDER BY id",
+                    "SELECT token_hash,csrf,expires FROM sessions ORDER BY token_hash",
+                    "SELECT id,name,client_uuid,email,token,enabled,created,upload,download FROM users ORDER BY id",
+                    "SELECT id,name,port,enabled,deleted,created,browser,access_code,proxy_password,pair_hash,"
+                    "pair_expires,public_key,agent_hash,last_seen,last_ip,last_test,driver_version FROM egress_devices ORDER BY id",
+                    "SELECT name,run,value FROM counters ORDER BY name", "SELECT key,value FROM state ORDER BY key",
+                    "SELECT user_id,total_bytes FROM limit_usage ORDER BY user_id",
+                    "SELECT user_id,day,bytes FROM limit_daily ORDER BY user_id,day")
+    with closing(sqlite3.connect(path)) as copy, copy:
+        copy.execute('INSERT INTO sessions VALUES(?,?,?)',
+                     (hashlib.sha256(token.encode()).hexdigest(), csrf, int(time.time()) + 60))
+        before = [copy.execute(sql).fetchall() for sql in identity_sql]
+    configuration.update(data_dir=str(isolated), egress_dir=str(isolated / 'egress'))
+    config_file = isolated / 'config.json'
+    config_file.write_text(json.dumps(configuration))
+    run('chown', '-R', 'treeroot:treeroot', str(isolated))
+    config_file.chmod(0o600)
+    with subprocess.Popen(['runuser', '-u', 'treeroot', '--', 'env', 'TREEROOT_CONFIG=' + str(config_file),
+                           str(staging / GO_BINARY), '-root', str(staging), '-listen', '127.0.0.1:0',
+                           '-limits=', '-collect=false'], stdout=subprocess.PIPE, text=True) as process:
+        try:
+            if not select.select([process.stdout], [], [], 15)[0]:
+                raise RuntimeError('Go panel preflight startup timed out')
+            address = process.stdout.readline().strip()
+            if not address.startswith('127.0.0.1:'):
+                raise RuntimeError('Go panel preflight startup failed')
+            health(address, staging, limits=False)
+            for route in ('me', 'users', 'server', 'resources', 'overview', 'activity', 'egress',
+                          'egress/overview', 'egress/records?search=example', 'egress/blacklist'):
+                request = urllib.request.Request(f'http://{address}/api/{route}',
+                                                 headers={'Cookie': '__Host-treeroot=' + token})
+                with urllib.request.urlopen(request, timeout=3) as response:
+                    json.load(response)
+            run('runuser', '-u', 'treeroot', '--', 'env', 'TREEROOT_CONFIG=' + str(config_file),
+                str(staging / GO_BINARY), '-backup')
+            with closing(sqlite3.connect(path)) as checked:
+                if (checked.execute('PRAGMA quick_check').fetchone() != ('ok',) or
+                        [checked.execute(sql).fetchall() for sql in identity_sql] != before):
+                    raise RuntimeError('Go preflight database or identity validation failed')
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=10)
+
+
+def go_update(archive, public_ip):
+    ARCHIVES.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with (ARCHIVES / '.go-release.lock').open('a') as lock, tempfile.TemporaryDirectory(prefix='treeroot-go-') as temporary:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        staging = Path(temporary)
+        safe_extract(archive, staging, allow=GO_PACKAGE)
+        if {path.name for path in staging.iterdir()} != set(GO_PACKAGE):
+            raise RuntimeError('Incomplete Go package')
+        for name in CONNECTOR:
+            if digest(staging / name) != digest(APP / name):
+                raise RuntimeError('Connector bytes differ from production: ' + name)
+        staging.chmod(0o755)
+        (staging / GO_BINARY).chmod(0o755)
+        check_candidate(staging)
+        snapshot = backup(public_ip)
+        saved = ARCHIVES / ('rollback-' + Path(snapshot['archive']).name.removesuffix('.tar.gz'))
+        saved.mkdir(mode=0o700)
+        panel_unit = UNITS_DIR / 'treeroot-panel.service'
+        backup_unit = UNITS_DIR / 'treeroot-backup.service'
+        for path in (panel_unit, backup_unit, *(APP / name for name in (GO_BINARY, *GO_ASSETS))):
+            copy_file(path, saved / path.name)
+        previous_go = go_active()
+        limiter = 'treeroot-limits.service'
+        web = 'treeroot-panel.service'
+        old_limit_enabled = subprocess.run(['systemctl', 'is-enabled', '--quiet', limiter]).returncode == 0
+        if old_limit_enabled:
+            (saved / 'enable-legacy-limiter').touch()
+        try:
+            run('systemctl', 'stop', web, limiter)
+            for name in (GO_BINARY, *GO_ASSETS):
+                run('install', '-o', 'root', '-g', 'root', '-m', '0755' if name == GO_BINARY else '0644',
+                    str(staging / name), str(APP / name))
+            panel_unit.write_text(re.sub(r'^ExecStart=.*$', 'ExecStart=' + str(APP / GO_BINARY),
+                                        (saved / panel_unit.name).read_text(), flags=re.M))
+            backup_unit.write_text(re.sub(r'^ExecStart=.*$', 'ExecStart=' + str(APP / GO_BINARY) + ' -backup',
+                                         (saved / backup_unit.name).read_text(), flags=re.M))
+            run('systemd-analyze', 'verify', str(panel_unit), str(backup_unit))
+            if old_limit_enabled:
+                run('systemctl', 'disable', limiter)
+            run('systemctl', 'daemon-reload')
+            run('systemctl', 'start', web)
+            for attempt in range(20):
+                try:
+                    health()
+                    break
+                except OSError:
+                    if attempt == 19:
+                        raise
+                    time.sleep(0.25)
+            result = status()
+            if result['sqlite'] != 'ok':
+                raise RuntimeError('Production SQLite quick_check failed')
+        except BaseException:
+            run('systemctl', 'stop', web)
+            for path in (panel_unit, backup_unit, *(APP / name for name in (GO_BINARY, *GO_ASSETS))):
+                if (saved / path.name).exists():
+                    shutil.copy2(saved / path.name, path)
+                elif path.name == GO_BINARY:
+                    path.unlink(missing_ok=True)
+            run('systemctl', 'daemon-reload')
+            run('systemctl', 'start', web)
+            if old_limit_enabled:
+                run('systemctl', 'enable', '--now', limiter)
+            elif not previous_go and (UNITS_DIR / limiter).exists():
+                run('systemctl', 'start', limiter)
+            raise
+        return {'backup': snapshot, 'rollback_files': str(saved), 'runtime': 'go',
+                'connector_files_unchanged': True, **result}
 
 
 def source_backups(directory):
@@ -290,7 +435,7 @@ def cleanup(apply=False):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('command', choices=['status', 'backup', 'update', 'cleanup'])
+    parser.add_argument('command', choices=['status', 'backup', 'update', 'go-update', 'cleanup'])
     parser.add_argument('--apply', action='store_true', help='Apply the inspected cleanup plan')
     parser.add_argument('--public-ip', default='186.244.200.45')
     parser.add_argument('--archive')
@@ -302,6 +447,8 @@ def main():
         result = cleanup(args.apply)
     elif args.command == 'backup':
         result = backup(args.public_ip, args.stop_services)
+    elif args.command == 'go-update':
+        result = go_update(args.archive, args.public_ip)
     else:
         result = update(args.archive, args.public_ip)
     print(json.dumps(result, ensure_ascii=False))

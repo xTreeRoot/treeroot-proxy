@@ -14,3 +14,13 @@ body.egress-dialog-open{overflow:hidden}#egress-blacklist-dialog{width:min(760px
 @media(max-width:700px){.records-view .sidebar-info{display:none}.egress-records-panel .search-field{gap:0}.egress-records-panel .search-field>span{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}}
 @media(max-width:700px){.sidebar nav{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}.nav-item,.nav-item[data-page="egress-records"]{font-size:12px;white-space:nowrap}.egress-records-panel .search-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 10px}.egress-records-panel .search-field{max-width:none}.egress-records-panel .search-actions{grid-column:1/-1}.egress-records-panel .pagination-summary{flex-basis:100%}.egress-records-panel .pagination-controls{width:100%;justify-content:flex-end}}
 @media(max-height:500px) and (max-width:700px){.sidebar{padding-block:4px}.sidebar .brand,.sidebar .sidebar-info{display:none}.sidebar .sidebar-foot{top:0;right:4px}.sidebar nav{grid-template-columns:repeat(6,minmax(0,1fr));padding-right:30px;gap:0}.nav-item,.nav-item[data-page="egress-records"]{font-size:10px;white-space:normal;line-height:1.25;padding:4px 2px;min-height:36px}.content{padding:8px}.egress-records-panel .search-form{grid-template-columns:repeat(4,minmax(0,1fr));padding:8px;gap:4px 8px}.egress-records-panel .search-field{gap:2px;font-size:10px}.egress-records-panel .search-field input,.egress-records-panel .search-field select{padding:5px 7px;min-height:34px;font-size:12px}.egress-records-panel .search-actions{grid-column:auto}.egress-records-panel .search-actions .button{min-height:32px;padding:4px 10px;font-size:11px}.egress-records-panel .pagination{min-height:54px;flex-wrap:nowrap;padding:5px 8px}.egress-records-panel .pagination-summary{flex-basis:auto;white-space:nowrap}.egress-records-panel .pagination-controls{width:auto}}
+
+.egress-card,.egress-blacklist-item{background:var(--panel)}
+.egress-card .identity-name{min-width:0;overflow-wrap:anywhere}
+@media(max-width:700px){
+  .sidebar nav{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .nav-item,.nav-item[data-page="egress-records"]{font-size:11px;white-space:normal}
+  .egress-panel .panel-heading{flex-wrap:wrap}
+  .egress-heading-actions{max-width:none;justify-content:flex-start}
+  .egress-heading-actions .button{min-height:44px;padding-inline:10px}
+}

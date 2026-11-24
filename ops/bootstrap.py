@@ -16,7 +16,7 @@ import tempfile
 import urllib.request
 import zipfile
 
-from remote import APP, DATA, FILES, UNITS, backup, digest, safe_extract
+from remote import APP, DATA, FILES, GO_BINARY, UNITS, backup, digest, safe_extract
 
 
 def execute(*command, **kwargs):
@@ -115,6 +115,9 @@ def install(args):
             shutil.copyfile(root / 'app' / name, APP / name)
             os.chown(APP / name, 0, 0)
             os.chmod(APP / name, 0o644)
+        go_runtime = (root / 'app' / GO_BINARY).is_file()
+        if go_runtime:
+            execute('install', '-o', 'root', '-g', 'root', '-m', '0755', str(root / 'app' / GO_BINARY), str(APP / GO_BINARY))
         if not (APP / 'venv/bin/pip').exists():
             execute('python3', '-m', 'venv', str(APP / 'venv'))
         execute(str(APP / 'venv/bin/pip'), 'install', '--disable-pip-version-check', '-r', str(APP / 'requirements.lock'))
@@ -160,6 +163,16 @@ def install(args):
             if name == 'treeroot-limits.service' and not (root / 'services' / name).exists():
                 continue
             shutil.copyfile(root / 'services' / name, Path('/etc/systemd/system') / name)
+        if (root / 'egress/panel-service.conf').is_file():
+            dropin = Path('/etc/systemd/system/treeroot-panel.service.d/egress.conf')
+            dropin.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(root / 'egress/panel-service.conf', dropin)
+            egress_group = grp.getgrnam('treeroot-egress') if any(group.gr_name == 'treeroot-egress' for group in grp.getgrall()) else None
+            if egress_group is None:
+                execute('groupadd', '--system', 'treeroot-egress')
+                egress_group = grp.getgrnam('treeroot-egress')
+            execute('usermod', '-aG', 'treeroot-egress', 'treeroot')
+            directory('/var/lib/treeroot-egress', treeroot.pw_uid, egress_group.gr_gid, 0o2750)
         copy = root / 'logrotate/treeroot'
         if copy.exists():
             Path('/etc/logrotate.d').mkdir(exist_ok=True)
@@ -168,8 +181,10 @@ def install(args):
         execute('/usr/local/bin/caddy', 'validate', '--config', '/etc/caddy/Caddyfile')
         execute('systemctl', 'daemon-reload')
         execute('systemctl', 'enable', '--now', 'xray', 'caddy', 'treeroot-panel', 'treeroot-backup.timer')
-        if (root / 'services/treeroot-limits.service').exists():
+        if (root / 'services/treeroot-limits.service').exists() and not go_runtime:
             execute('systemctl', 'enable', '--now', 'treeroot-limits')
+        elif (root / 'services/treeroot-limits.service').exists():
+            execute('systemctl', 'disable', 'treeroot-limits')
         print(json.dumps({'restored': True, 'users': count, 'domain': manifest['domain'],
                           'new_ip': args.public_ip, 'dns_changed': False}, ensure_ascii=False))
 

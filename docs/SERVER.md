@@ -33,10 +33,10 @@
 | TCP 10001 | `127.0.0.1` | Xray VMess WebSocket 入站 |
 | TCP/UDP 10002 | `127.0.0.1` | TreeRoot 账号限流中继；UDP 关联使用本机临时端口 |
 | TCP 10085 | `127.0.0.1` | Xray Handler/Stats/Logger/Routing gRPC API |
-| TCP 19991 | `127.0.0.1` | uvicorn / FastAPI |
+| TCP 19991 | `127.0.0.1` | Go 面板 |
 | TCP 2019 | `127.0.0.1` | Caddy 本机管理接口 |
 
-Caddy 按 WebSocket 路径把代理转发至 Xray，其余域名请求交给 FastAPI。具体路径含在私密配置快照中。保留的 IP 站点只处理代理及原始用户旧订阅，不提供公开后台；迁移不应继续依赖旧 IP 链接。
+Caddy 按 WebSocket 路径把代理转发至 Xray，其余域名请求交给 Go 面板。具体路径含在私密配置快照中。保留的 IP 站点只处理代理及原始用户旧订阅，不提供公开后台；迁移不应继续依赖旧 IP 链接。
 
 TLS 由 Caddy 向 Let's Encrypt 申请和自动续期；ACME 配置禁用了 TLS-ALPN challenge，所以必须保持公网 80 可达。Caddy 证书及 ACME 账号状态位于 `/var/lib/caddy`。当前仅启用 HTTP/1.1、HTTP/2，正常方案不依赖 UDP 443。
 
@@ -62,7 +62,8 @@ aliyun alidns DescribeDomainRecordInfo --profile treeroot-dns --RecordId 2116072
 | 内容 | 位置 | 属主 / 权限 |
 | --- | --- | --- |
 | 应用 | `/opt/treeroot` | 源文件 `root:root 644` |
-| Python venv | `/opt/treeroot/venv` | 服务以 `treeroot` 读取运行 |
+| Go 程序 | `/opt/treeroot/treeroot-go` | `root:root 755` |
+| Python venv | `/opt/treeroot/venv` | 保留给旧版回退 |
 | 面板配置 | `/etc/treeroot/config.json` | `root:treeroot 640` |
 | 数据目录 | `/var/lib/treeroot` | `treeroot:treeroot 700` |
 | SQLite | `/var/lib/treeroot/panel.sqlite3` | `treeroot:treeroot 600`，WAL 模式 |
@@ -87,9 +88,9 @@ aliyun alidns DescribeDomainRecordInfo --profile treeroot-dns --RecordId 2116072
 | --- | --- | --- |
 | `xray.service` | `xray:xray` | `/usr/local/bin/xray run -config /usr/local/etc/xray/config.json` |
 | `caddy.service` | `caddy:caddy` | `/usr/local/bin/caddy run --config /etc/caddy/Caddyfile` |
-| `treeroot-limits.service` | `treeroot:treeroot` | venv 中 `limits.py`，监听 `127.0.0.1:10002`，共享账号额度与带宽 |
-| `treeroot-panel.service` | `treeroot:treeroot`，附加组 xray | venv 中 uvicorn，监听 `127.0.0.1:19991` |
-| `treeroot-backup.service` | `treeroot:treeroot` | 运行 `/opt/treeroot/backup.py` |
+| `treeroot-limits.service` | `treeroot:treeroot` | 禁用，保留用于 Python 回退 |
+| `treeroot-panel.service` | `treeroot:treeroot`，附加组 xray | Go，监听面板 `127.0.0.1:19991` 与限流 `127.0.0.1:10002` |
+| `treeroot-backup.service` | `treeroot:treeroot` | 运行 `/opt/treeroot/treeroot-go -backup` |
 | `treeroot-backup.timer` | systemd | 每日 UTC 00:00 后随机延迟最多 300 秒，约北京时间 08:00–08:05；错过后补跑 |
 
 `xray.service` 的 Description 仍是历史文字“Personal VLESS REALITY proxy”，实际运行的是 VMess WS。判断协议应看真实配置和订阅。

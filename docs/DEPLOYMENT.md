@@ -7,23 +7,24 @@
 ```bash
 cd /Users/xugenyin/file/treeroot-proxy
 python3 ops/manage.py status
-python3 -m unittest discover -s tests -v
-python3 ops/manage.py --dry-run update
-python3 ops/manage.py update
+mkdir -p work
+(cd gopanel && go test ./... && go build -trimpath -o ../work/treeroot-gopanel .)
+TREEROOT_GO_PANEL_BIN="$PWD/work/treeroot-gopanel" .venv/bin/python -m unittest discover -s tests -v
+python3 ops/manage.py --dry-run go-update
+python3 ops/manage.py go-update
 python3 ops/manage.py status
 ```
 
-一次 `update` 会完成：
+一次 `go-update` 会完成：
 
-1. 按 `ops/remote.py` 的 `FILES` 白名单打包运行文件，拒绝符号链接与额外文件；验证 Python 语法及已安装依赖版本。
-2. 在旧版本运行时创建包含源码、SQLite、配置、证书和服务单元的完整备份。
-3. 停止面板，替换源文件，再启动面板。Xray 与 Caddy 继续运行。
-4. 重试检查 `/api/me`、CSS 和 JS 的 HTTP 状态及 MIME。
-5. 发布失败恢复旧源文件；成功后把完整备份下载至本机 `private/backups/` 并验证 SHA256。
+1. 构建 Linux amd64 静态二进制，按白名单打包。校验三份连接器源码与线上逐字节一致，不替换它们。
+2. 在生产库副本运行候选程序，检查受保护接口、备份、身份、会话及账本；通过后创建完整备份。
+3. 停止面板及旧限流，替换 Go 程序、Web 资源和面板/备份单元。Xray、Caddy 和 SSH 不重启；活动代理连接会重连。
+4. 检查服务、SQLite、SOCKS5 和静态资源 MIME。失败恢复原程序和单元，保留最新数据库；成功下载完整备份并验证 SHA256。
 
 发布包不会包含 `private/`、数据库、生产配置或运维文档，也不会改 DNS。只有修改文档或 `ops/` 时，不需要为了文档发布应用；运维助手会在下一次调用时经 SSH 上传。
 
-**数据库结构变更需要专门迁移方案。** 源文件自动回退无法撤销已经执行的数据库写入。普通发布也不安装/升级依赖。
+旧 Python 主机仍可用 `update`；Go 上线后不要用它更新。回退保留新增表与最新业务数据。
 
 ## 发布后怎么确认
 
@@ -214,6 +215,14 @@ BBRx 只能缓解丢包下的吞吐下降，不会修复运营商线路或消除
 更新器会将登记表、SSH 配置片段和公钥查询器一并备份。迁移新服务器后需要重新执行配置脚本，写入新服务器 IP 和实际 SSH 主机公钥；随后在电脑重新下载连接器并配对。客户端私钥始终保存在用户电脑，不在服务器备份内。旧备份缺少此功能文件时仍可恢复旧界面。
 
 回退出口服务时先在面板停用电脑，再停止本机连接器。保留新增 DB 表和备份；移除 `/etc/ssh/sshd_config.d/40-treeroot-egress.conf` 前先备份并运行 `sshd -t`，再 reload ssh。不要取消或替换现有运维登录凭据。
+
+## Go 后端与 SQLite 队列
+
+面板和 SOCKS5 分别监听 `127.0.0.1:19991`、`127.0.0.1:10002`，由同一个 Go 进程运行。原数据库不重建：只增加缺失的累计检查点表和索引。连接明细按 ID 锚点分页，只取当前页的必要列。
+
+WAL 读连接与唯一写连接分开。写队列容纳 64 个待处理事务，满时返回 503。心跳与累计检查点一起提交后才确认记录；有限额度先提交账本再放行。
+
+手动回退用发布结果的 `rollback_files`：停止面板，恢复原二进制（若有）、Web 文件、面板和备份单元，daemon-reload 并启动面板。回退到 Python 时还需启用原 `treeroot-limits.service`。保持最新数据库，并验证静态资源、真实代理与连接器心跳。
 
 ## 仓库源码备份包（Release）
 

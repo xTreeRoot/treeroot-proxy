@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -13,7 +14,7 @@ from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'ops'))
-from remote import FILES
+from remote import FILES, GO_BINARY, GO_PACKAGE
 
 
 def load_configuration():
@@ -43,6 +44,18 @@ def package(destination):
             path = ROOT / name
             if not path.is_file() or path.is_symlink():
                 raise RuntimeError('Missing or unsafe application file: ' + name)
+            archive.add(path, arcname=name, recursive=False)
+
+
+def package_go(destination):
+    binary = destination.parent / GO_BINARY
+    subprocess.run(['go', 'build', '-trimpath', '-ldflags=-s -w', '-o', str(binary), '.'],
+                   cwd=ROOT / 'gopanel', check=True, env=dict(os.environ, CGO_ENABLED='0', GOOS='linux', GOARCH='amd64'))
+    with tarfile.open(destination, 'w:gz') as archive:
+        for name in GO_PACKAGE:
+            path = binary if name == GO_BINARY else ROOT / name
+            if not path.is_file() or path.is_symlink():
+                raise RuntimeError('Missing or unsafe Go release file: ' + name)
             archive.add(path, arcname=name, recursive=False)
 
 
@@ -77,6 +90,7 @@ def main():
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('status')
     sub.add_parser('update')
+    sub.add_parser('go-update')
     p = sub.add_parser('cleanup', help='Inspect obsolete source packages and reproducible caches')
     p.add_argument('--apply', action='store_true')
     p = sub.add_parser('backup')
@@ -93,8 +107,8 @@ def main():
         config['host'] = args.host
     if args.dry_run:
         print(json.dumps({'command': args.command, 'target': config['host'],
-                          'release_files': list(FILES), 'changes_dns': args.command == 'dns',
-                          'stops_proxy': bool(getattr(args, 'stop_services', False)),
+                          'release_files': list(GO_PACKAGE if args.command == 'go-update' else FILES), 'changes_dns': args.command == 'dns',
+                          'stops_proxy': args.command == 'go-update' or bool(getattr(args, 'stop_services', False)),
                           'preserves_database_on_update': True}, ensure_ascii=False, indent=2))
         return
     if args.command == 'dns':
@@ -128,20 +142,20 @@ def main():
     command = ['python3', directory + '/remote.py', args.command, '--public-ip', config['host']]
     if getattr(args, 'apply', False):
         command.append('--apply')
-    if args.command == 'update':
+    if args.command in ('update', 'go-update'):
         with tempfile.TemporaryDirectory() as temporary:
             archive = Path(temporary) / 'release.tar.gz'
-            package(archive)
+            (package_go if args.command == 'go-update' else package)(archive)
             remote_archive = directory + '/release-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '.tar.gz'
             subprocess.run(scp(config, str(archive), config['ssh_user'] + '@' + config['host'] + ':' + remote_archive), check=True)
         command += ['--archive', remote_archive]
     if getattr(args, 'stop_services', False):
         command.append('--stop-services')
-    result = subprocess.run(ssh(config, shlex.join(command)), check=True, capture_output=True, text=True)
+    result = subprocess.run(ssh(config, shlex.join(command)), check=True, stdout=subprocess.PIPE, text=True)
     metadata = json.loads(result.stdout)
     if args.command == 'backup':
         metadata['local_backup'] = pull_backup(config, metadata)
-    elif args.command == 'update':
+    elif args.command in ('update', 'go-update'):
         metadata['local_backup'] = pull_backup(config, metadata['backup'])
     print(json.dumps(metadata, ensure_ascii=False, indent=2))
 

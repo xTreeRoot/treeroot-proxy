@@ -115,10 +115,13 @@ class OperationsTests(unittest.TestCase):
 
     def test_source_backup_allowlist_rejects_secrets_and_recursive_archives(self):
         for name in ['private/config.json', '.git/config', 'releases/old.tar.gz', 'panel.sqlite3',
-                     '../app.py', '/etc/treeroot/config.json', 'ops/__pycache__/x.pyc']:
+                     '../app.py', '/etc/treeroot/config.json', 'ops/__pycache__/x.pyc',
+                     'gopanel/private/config.go', 'gopanel/treeroot-gopanel', 'gopanel/panel.sqlite3']:
             self.assertFalse(releases.source_allowed(name))
         self.assertTrue(releases.source_allowed('app.py'))
         self.assertTrue(releases.source_allowed('docs/DEPLOYMENT.md'))
+        for name in ('gopanel/main.go', 'gopanel/go.mod', 'gopanel/go.sum'):
+            self.assertTrue(releases.source_allowed(name))
 
     def test_health_checks_chart_bundle_only_when_page_uses_it(self):
         with tempfile.TemporaryDirectory() as temporary:

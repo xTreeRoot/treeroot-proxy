@@ -10,7 +10,7 @@
 cd /Users/xugenyin/file/treeroot-proxy
 python3 ops/manage.py status       # 检查服务、数据库和静态资源
 python3 ops/manage.py backup       # 完整备份，并下载到本机
-python3 ops/manage.py update       # 修改代码后发布，自动先备份
+python3 ops/manage.py go-update    # 编译、预验证、备份并发布
 ```
 
 本机需要 Python 3.12+ 与系统自带 SSH/SCP；运维脚本没有额外 pip 依赖。更新 DNS 时还需要已登录的阿里云 CLI。生产 FastAPI 依赖固定在 `requirements.lock`。
@@ -48,10 +48,12 @@ python3 ops/manage.py update       # 修改代码后发布，自动先备份
 
 ## 项目结构与验证
 
-`app.py` 是 FastAPI 后端，`index.html` / `app.js` / `style.css` 是前端；`backup.py` 负责每日 SQLite 备份。`ops/` 提供 SSH 更新、完整备份和新机恢复，`tests/` 检查发布隔离及迁移数据保留。
+`gopanel/` 是 Go 服务端，包含管理、订阅、采集、限流、出口接口及每日备份。Web UI 无需构建；电脑端连接器与 SSH 隧道不变。原 Python 后端保留用于回退和兼容测试。
 
 ```bash
-python3 -m unittest discover -s tests -v
+mkdir -p work
+(cd gopanel && go test ./... && go build -trimpath -o ../work/treeroot-gopanel .)
+TREEROOT_GO_PANEL_BIN="$PWD/work/treeroot-gopanel" .venv/bin/python -m unittest discover -s tests -v
 ```
 
 2026-10-30 已完成线上完整备份、备份哈希与 SQLite 校验，以及同版本真实更新：用户身份保留、流量不减少、Xray/Caddy 不重启。新机迁移脚本尚未在另一台 VPS 实机演练，迁移时仍须按文档先验证新机。
@@ -78,4 +80,4 @@ python3 -m unittest discover -s tests -v
 
 `releases/` 是仓库内的完整源码备份，只留最新两版，包含来源提交与逐文件 SHA256，不含生产数据和秘密。先提交源码，再执行 `python3 ops/releases.py pack vYYYY.MM.DD.N --ref 源码提交` 并提交生成包。运行 `python3 ops/releases.py sync` 将两版同步到服务器 `/root/treeroot-ops/releases`。
 
-`python3 ops/manage.py cleanup` 查看旧源码包与缓存清理计划，`cleanup --apply` 执行。两份源码包验证通过后才允许清理；数据库、配置、证书、访问日志和完整运维备份保留。普通更新仍使用 `ops/manage.py update`，详见部署文档。
+`python3 ops/manage.py cleanup` 查看旧源码包与缓存清理计划，`cleanup --apply` 执行。两份源码包验证通过后才允许清理；数据库、配置、证书、访问日志和完整运维备份保留。
