@@ -47,7 +47,7 @@ async function refreshEgressOverview(){
     const data=await api('/egress/overview?'+new URLSearchParams({device_id:device,hours}),{signal:AbortSignal.any([controller.signal,AbortSignal.timeout(10000)])});
     if(!current())return;
     egressOverviewData=data;renderEgressOverview(data);
-    status.textContent=`每 15 秒更新 · ${date(data.until)}${data.last_record?' · 最近连接 '+date(data.last_record):' · 暂无已上报连接'}`;
+    status.textContent='更新于 '+date(data.until);
   }catch(error){
     if(!current())return;
     egressMetricIds.forEach(key=>$('#egress-'+key).textContent='—');
@@ -55,7 +55,7 @@ async function refreshEgressOverview(){
     echarts.getInstanceByDom($('#egress-traffic-chart'))?.clear();
     $('#egress-trend-empty').hidden=true;
     $('#egress-domain-list').innerHTML='<div class="empty">出口统计暂不可用</div>';
-    $('#egress-device-usage').innerHTML='<div class="empty">请稍后重试，统计将在下次刷新时更新</div>';
+    $('#egress-device-usage').innerHTML='<div class="empty">用量暂不可用</div>';
     status.textContent='出口统计更新失败：'+(error.name==='TimeoutError'?'请求超时':error.message);status.classList.add('error');
   }finally{if(egressOverviewController===controller)$('#egress-device-usage').setAttribute('aria-busy','false');}
 }
@@ -163,11 +163,11 @@ async function refreshEgressBlacklist(){
 function setEgressBlacklistDialog(open){
   document.body.classList.toggle('egress-dialog-open',open);
 }
-$('#egress-blacklist-open').addEventListener('click',async()=>{
+$('#egress-blacklist-open').addEventListener('click',event=>busy(event.currentTarget,async()=>{
   await refreshEgressBlacklist();
   $('#egress-blacklist-dialog').showModal();
   setEgressBlacklistDialog(true);
-});
+}));
 $('#egress-blacklist-close').addEventListener('click',()=>$('#egress-blacklist-dialog').close());
 $('#egress-blacklist-dialog').addEventListener('close',()=>setEgressBlacklistDialog(false));
 async function refreshEgress(){
@@ -178,7 +178,7 @@ async function refreshEgress(){
   $('#add-egress').hidden=egressTrash;
   if(state.page!=='egress')return;
   renderEgressBlacklist();
-  $('#egress-devices').innerHTML=egressDevices.length?egressDevices.map(device=>`<article class="egress-card"><div class="egress-card-head"><strong class="identity-name">${esc(device.name)}</strong><span class="badge ${device.online?'':'off'}"><i class="dot"></i>${device.online?'已连接':!device.enabled?'已停用':device.paired?'等待连接':'待安装'}</span></div><div class="egress-details"><span>设备<strong>${esc(device.browser.platformName||device.browser.platform||'待识别')} ${esc(device.browser.platformVersion)}</strong></span><span>出口 IP<strong>${esc(device.last_ip||'待检测')}</strong></span><span>最近在线<strong>${date(device.last_seen)}</strong></span><span>系统驱动<strong>${esc(device.driver_version||'未上报')}</strong></span></div><div class="egress-actions">${egressTrash?`<button class="button subtle" data-egress-action="restore" data-egress-id="${device.id}">恢复设备</button>`:`<button class="button subtle" data-egress-action="setup" data-egress-id="${device.id}" ${!device.enabled?'disabled':''}>${device.paired?'重新安装连接器':'一键连接'}</button><button class="button subtle" data-egress-action="test" data-egress-id="${device.id}" ${!device.online?'disabled':''}>检测出口 IP</button><button class="button subtle" data-egress-action="code" data-egress-id="${device.id}">复制应用连接码</button><button class="button ${device.enabled?'subtle':'primary'}" data-egress-action="toggle" data-egress-id="${device.id}">${device.enabled?'停用':'启用并自动连接'}</button><button class="button danger" data-egress-action="delete" data-egress-id="${device.id}">删除</button>`}</div></article>`).join(''):'<div class="egress-empty">暂无电脑</div>';
+  $('#egress-devices').innerHTML=egressDevices.length?egressDevices.map(device=>`<article class="egress-card"><div class="egress-card-head"><strong class="identity-name">${esc(device.name)}</strong><span class="badge ${device.online?'':'off'}"><i class="dot"></i>${device.online?'已连接':!device.enabled?'已停用':device.paired?'等待连接':'待安装'}</span></div><div class="egress-details"><span>设备<strong>${esc(device.browser.platformName||device.browser.platform||'待识别')} ${esc(device.browser.platformVersion)}</strong></span><span>出口 IP<strong>${esc(device.last_ip||'待检测')}</strong></span><span>最近在线<strong>${date(device.last_seen)}</strong></span><span>系统驱动<strong>${esc(device.driver_version||'未上报')}</strong></span></div><div class="egress-actions">${egressTrash?`<button class="button subtle" data-egress-action="restore" data-egress-id="${device.id}">恢复设备</button>`:`<button class="button subtle" data-egress-action="setup" data-egress-id="${device.id}" ${!device.enabled?'disabled':''}>${device.paired?'下载连接器':'下载配对包'}</button><button class="button subtle" data-egress-action="test" data-egress-id="${device.id}" ${!device.online?'disabled':''}>检测出口 IP</button><button class="button subtle" data-egress-action="code" data-egress-id="${device.id}">复制应用连接码</button><button class="button ${device.enabled?'subtle':'primary'}" data-egress-action="toggle" data-egress-id="${device.id}">${device.enabled?'停用':'启用'}</button><button class="button danger" data-egress-action="delete" data-egress-id="${device.id}">删除</button>`}</div></article>`).join(''):'<div class="egress-empty">暂无电脑</div>';
 }
 $('#egress-blacklist-form').addEventListener('submit',event=>{
   event.preventDefault();busy(event.submitter,async()=>{
@@ -192,9 +192,10 @@ $('#egress-blacklist-form').addEventListener('submit',event=>{
   });
 });
 $('#egress-blacklist-cancel').addEventListener('click',resetEgressBlacklistEditor);
-document.addEventListener('click',event=>{
+document.addEventListener('click',async event=>{
   const button=event.target.closest('[data-egress-blacklist-action]');if(!button)return;
   const item=egressBlacklist.find(entry=>String(entry.id)===button.dataset.egressBlacklistId);if(!item)return;
+  if(button.dataset.egressBlacklistAction==='delete' && !await confirmAction('删除「'+item.host+'」'))return;
   busy(button,async()=>{
     const action=button.dataset.egressBlacklistAction;
     if(action==='edit'){
@@ -219,9 +220,10 @@ $('#egress-form').addEventListener('submit',event=>{
     $('#egress-dialog').close();await refreshEgress();toast('电脑已添加');
   });
 });
-document.addEventListener('click',event=>{
+document.addEventListener('click',async event=>{
   const button=event.target.closest('[data-egress-action]');if(!button)return;
   const device=egressDevices.find(item=>item.id===button.dataset.egressId);if(!device)return;
+  if(button.dataset.egressAction==='delete' && !await confirmAction('删除「'+device.name+'」'))return;
   busy(button,async()=>{
     const path='/egress/'+device.id;
     if(button.dataset.egressAction==='delete'){await api(path,{method:'DELETE',body:'{}'});toast('电脑已删除');}

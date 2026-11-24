@@ -11,6 +11,13 @@
 - 查阅现有代码和真实配置，复用已有接口；不要猜接口、初始化已有生产数据或盲目重构。
 - 明确且已获授权的维护工作应完成并验证；关键业务意图确实不明确时再向用户确认。
 
+## Web UI 与交互
+
+- 页面、卡片、弹窗均禁止放主标题、副标题、说明段落、使用教程或装饰文案。接口返回后动态生成的内容也遵守这条规则。
+- 可见文字只保留导航、字段名、数据和单位、操作按钮，以及与当前操作有关的加载、空态、成功和错误反馈。用布局、间距和对齐区分区域；读屏名称用 `aria-label`。
+- 筛选、切页和返回要保留明确的选中状态。删除或重置前让用户确认具体对象，取消和 Esc 都应安全退出。
+- 手机和桌面都要能完成核心操作。验收时实际走一遍导航、筛选、分页和弹窗，检查键盘焦点、触控区域、控制台错误和资源请求。
+
 ## 先读这些文件
 
 - `README.md`：项目入口和常用命令。
@@ -28,9 +35,9 @@
 - **实际代理协议为 VMess + WebSocket + TLS，公网端口 443。**
 - `xray.service` 的旧 Description 写着 VLESS REALITY，这是历史名称，不能据此生成客户端配置。
 - Caddy 终止 TLS，把 WebSocket 转到 `127.0.0.1:10001`，把管理网站和订阅转到 `127.0.0.1:19991`。
-- FastAPI + SQLite 提供管理、订阅、统计；HTML/CSS/JS 无前端构建步骤。
+- Go 面板（`gopanel/`）提供管理、订阅、采集和每日备份，前端使用静态 HTML/CSS/JS。SQLite 写入经有界内存队列串行提交，连接明细在数据库分页，查询只选需要的列。
 - Xray 的 Handler/Stats/Logger API 为 `127.0.0.1:10085`，Caddy admin 为 `127.0.0.1:2019`；均不可暴露到公网。
-- `treeroot-limits.service` 在 `127.0.0.1:10002` 提供认证 SOCKS5 TCP/UDP 中继，按 Xray 用户路由执行共享带宽和总/日额度；该端口不可暴露公网。首次接入用 `ops/limits_setup.py --backup 已验证完整备份`，会校验配置并短暂重启 Xray。后续普通发布仅在 `limits.py` 变化时重启限流服务。
+- Go 面板进程在 `127.0.0.1:10002` 提供认证 SOCKS5 TCP/UDP 中继，按 Xray 用户路由执行共享带宽和总/日额度。旧 `treeroot-limits.service` 仅用于 Python 版本回退。
 - 限制配置存入新增 `user_limits`；`limit_usage` / `limit_daily` 是额度账本。首次切流前 `limits.activate` 从已有流量建立基线；切流后以中继实际授予的字节计额，不能再把已被 Xray 预读的缓冲字节重复加入。有限额度先持久化再转发，服务异常不回退直连；回退须同时恢复 Xray 路由，保留新增表和最新数据库。
 - 服务器 TCP 默认拥塞控制为独立外部模块 `bbrx`（不是内核自带 `bbr`），固定源码与参数见 `deploy/bbrx.json`，由 `ops/bbrx.py` 构建、试运行和回退。`treeroot-bbrx.service` 只在模块匹配当前内核且校验通过时启用；内核升级后须重编译，失败保留正常默认算法。只影响新连接，不重启代理、不强制断开用户；操作步骤见 `docs/DEPLOYMENT.md`。
 - 后台不是多管理员系统。每个“用户”是一个独立代理身份，统计按该身份汇总。
@@ -61,19 +68,20 @@
 ```bash
 cd /Users/xugenyin/file/treeroot-proxy
 python3 ops/manage.py status
-python3 -m unittest discover -s tests -v
-python3 ops/manage.py --dry-run update
-python3 ops/manage.py update
+mkdir -p work
+(cd gopanel && go test ./... && go build -trimpath -o ../work/treeroot-gopanel .)
+TREEROOT_GO_PANEL_BIN="$PWD/work/treeroot-gopanel" .venv/bin/python -m unittest discover -s tests -v
+python3 ops/manage.py --dry-run go-update
+python3 ops/manage.py go-update
 python3 ops/manage.py status
 ```
 
-`update` 自动创建完整备份、发布白名单源文件、只重启面板并检查资源 MIME；成功后把备份下载到 `private/backups/`。它不改 DNS，不覆盖数据库、生产配置、证书或 SSH 信息，不重启 Xray/Caddy。源文件发布失败会恢复原源文件；数据库结构变更不在自动回退范围内。
+`go-update` 在生产库副本验证候选程序，再创建完整备份并替换 Go 程序和 Web 资源。重启面板时，活动代理连接会重连。发布后检查服务、SQLite 和资源 MIME，并下载备份至 `private/backups/`。失败时恢复旧程序和单元，保留最新数据库。
 
-- 发布白名单以 `ops/remote.py` 的 `FILES` 为准，包括面板前后端、`egress.py`、`egress.js`、`egress.css`、`connector.py`、`egress_proxy.py`、图表库、备份脚本和锁定依赖。
+- 发布白名单以 `ops/remote.py` 的 `GO_PACKAGE` 为准。三份电脑端连接器文件与生产逐字节核对，保留已安装连接器的配对、凭据和协议。
 - 本地 `ops/`、`docs/`、`AGENTS.md` 和 `private/` 不进入 Web 程序发布包。运维脚本经 SSH 单独上传到 root 私有目录。
 - 更新必须保留用户 ID、UUID、token、启用状态、管理员密码、累计流量和域名历史。
 - 不要重新运行旧的初始部署脚本，不要调用初始化逻辑替代迁移，不要清空 DB 后重新生成用户。
-- `update` 要求服务器已安装依赖与 `requirements.lock` 一致。修改依赖前按部署文档准备并验证独立虚拟环境，不能顺便升级生产依赖。
 - 改表必须单独设计兼容迁移、备份和回退，验证后再部署；不要把源代码回退当作数据库回退。
 - 改 Xray/Caddy/systemd 配置需先备份，使用官方配置校验命令，再 reload/restart，并再次做真实代理测试。
 

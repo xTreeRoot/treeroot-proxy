@@ -15,7 +15,31 @@ function toast(message){$('#toast').textContent=message;$('#toast').classList.ad
 function showLogin(){state.csrf='';$('#app').classList.add('hidden');$('#login').classList.remove('hidden');}
 async function api(path,options={}){const response=await fetch('/api'+path,{...options,signal:options.signal||AbortSignal.timeout(options.method?60000:10000),headers:{'Content-Type':'application/json','X-CSRF-Token':state.csrf,...options.headers}});let data;try{data=await response.json();}catch{throw new Error('服务器暂时无法响应');}if(!response.ok){if(response.status===401&&path!='/login')showLogin();const message=Array.isArray(data.detail)?data.detail.map(x=>x.msg).join('；'):data.detail;throw new Error(message||'请求失败，请稍后重试');}return data;}
 async function busy(button,work){if(button.disabled)return;button.disabled=true;try{return await work();}catch(error){toast(error.message);}finally{button.disabled=false;}}
-function page(name){state.page=name;$('#app').classList.toggle('records-view',name==='egress-records');document.querySelectorAll('.page').forEach(x=>x.classList.add('hidden'));$('#page-'+name).classList.remove('hidden');document.querySelectorAll('.nav-item').forEach(item=>{const selected=item.dataset.page===name;item.classList.toggle('active',selected);if(selected)item.setAttribute('aria-current','page');else item.removeAttribute('aria-current');});document.title='TreeRoot · '+titles[name];if(name==='proxy-dashboard'&&trafficChart)requestAnimationFrame(()=>trafficChart.resize());refresh();}
+function page(name, updateHistory=true) {
+  if (!Object.hasOwn(titles, name)) name='overview';
+  if (updateHistory && location.hash !== '#'+name) history.pushState(null, '', '#'+name);
+  state.page=name;
+  $('#app').classList.toggle('records-view',name==='egress-records');
+  document.querySelectorAll('.page').forEach(section=>section.classList.toggle('hidden', section.id!=='page-'+name));
+  document.querySelectorAll('#desktop-nav .nav-item').forEach(link=>{
+    const selected=link.dataset.page===name;
+    link.classList.toggle('active',selected);
+    if (selected) link.setAttribute('aria-current','page');
+    else link.removeAttribute('aria-current');
+  });
+  $('#mobile-page').value=name;
+  document.title='TreeRoot · '+titles[name];
+  if (name==='proxy-dashboard' && trafficChart) requestAnimationFrame(()=>trafficChart.resize());
+  return refresh();
+}
+function confirmAction(label) {
+  const dialog=$('#confirm-dialog');
+  $('#confirm-action').textContent=label;
+  dialog.returnValue='';
+  const choice=new Promise(resolve=>dialog.addEventListener('close',()=>resolve(dialog.returnValue==='confirm'),{once:true}));
+  dialog.showModal();
+  return choice;
+}
 function badge(enabled){return `<span class="badge ${enabled?'':'off'}"><i class="dot"></i>${enabled?'已启用':'已禁用'}</span>`;}
 function avatar(name){return `<span class="mini-avatar">${esc(name.slice(0,1))}</span>`;}
 function pagination(name,total,pages){
@@ -170,21 +194,59 @@ async function refresh(){
   }catch(error){toast(error.name==='TimeoutError'?'请求超时，请稍后重试':error.message);}
   finally{state.refreshing=false;if(state.pending){state.pending=false;refresh();}}
 }
-async function enter(data){state.csrf=data.csrf;$('#account-name').textContent=data.username;$('#login').classList.add('hidden');$('#app').classList.remove('hidden');$('#password').value='';await refresh();}
+async function enter(data){state.csrf=data.csrf;$('#account-name').textContent=data.username;$('#login').classList.add('hidden');$('#app').classList.remove('hidden');$('#password').value='';await page(location.hash.slice(1),false);}
 function subscription(user){$('#subscription-dialog').setAttribute('aria-label',user.name+' · 订阅');$('#clash-link').value=user.clash_url;$('#rocket-link').value=user.shadowrocket_url;$('#subscription-dialog').showModal();}
 async function copy(selector){try{await navigator.clipboard.writeText($(selector).value);toast('订阅链接已复制');}catch{$(selector).focus();$(selector).select();toast('请复制已选中的链接');}}
 document.addEventListener('click',event=>{const button=event.target.closest('[data-pagination]');if(!button||button.disabled)return;const name=button.dataset.pagination,paging=state.pagination[name];paging.page+=Number(button.dataset.step);if(name==='activity'||name==='egress-records'){if(paging.page===1)paging.anchor=null;$('#'+name+'-table').scrollTop=0;(name==='activity'?renderActivity():renderEgressRecords()).catch(e=>toast(e.message));}else{renderUsers();if(name==='users')$('#user-cards').parentElement.scrollTop=0;}});
 document.addEventListener('change',event=>{const name=event.target.dataset.pageSize;if(!name)return;const paging=state.pagination[name];paging.size=Number(event.target.value);paging.page=1;if(name==='activity'||name==='egress-records'){paging.anchor=null;$('#'+name+'-table').scrollTop=0;(name==='activity'?renderActivity():renderEgressRecords()).catch(e=>toast(e.message));}else{renderUsers();if(name==='users')$('#user-cards').parentElement.scrollTop=0;}});
 $('#login-form').addEventListener('submit',async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;$('#login-error').textContent='';try{await enter(await api('/login',{method:'POST',body:JSON.stringify({username:$('#username').value,password:$('#password').value})}));}catch(error){$('#login-error').textContent=error.message;}finally{button.disabled=false;}});
-document.addEventListener('click',async event=>{const nav=event.target.closest('[data-page]');if(nav){if(nav.dataset.page==='proxy-dashboard'){state.filter='';resetPagination('usage');}page(nav.dataset.page);return;}const close=event.target.closest('.close-dialog');if(close){close.closest('dialog').close();return;}const button=event.target.closest('[data-action]');if(!button)return;const user=state.users.find(u=>u.id===Number(button.dataset.id));if(!user)return;const action=button.dataset.action;if(action==='limits')await openUserLimits(user,button);if(action==='subscription')subscription(user);if(action==='view'){state.filter=String(user.id);resetPagination('usage');page('proxy-dashboard');}if(action==='rename'){state.edit=user.id;$('#user-dialog').setAttribute('aria-label','重命名用户');$('#user-name').value=user.name;$('#user-dialog').showModal();}if(action==='toggle')await busy(button,async()=>{await api('/users/'+user.id,{method:'PATCH',body:JSON.stringify({enabled:!user.enabled})});toast(user.enabled?'用户已禁用':'用户已启用');state.usersLoadedAt=0;await refresh();});if(action==='reset'){$('#confirm-action').textContent='重置「'+user.name+'」的订阅';$('#confirm-action').dataset.id=user.id;$('#confirm-dialog').showModal();}});
+document.addEventListener('click',async event=>{
+  const nav=event.target.closest('[data-page]');
+  if(nav){
+    if(event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;
+    event.preventDefault();
+    page(nav.dataset.page);
+    $('#workspace').focus({preventScroll:true});
+    return;
+  }
+  const close=event.target.closest('.close-dialog');
+  if(close){close.closest('dialog').close();return;}
+  const button=event.target.closest('[data-action]');
+  if(!button)return;
+  const user=state.users.find(item=>item.id===Number(button.dataset.id));
+  if(!user)return;
+  switch(button.dataset.action){
+    case 'limits': await openUserLimits(user,button); break;
+    case 'subscription': subscription(user); break;
+    case 'view':
+      state.filter=String(user.id);resetPagination('usage');page('proxy-dashboard');break;
+    case 'rename':
+      state.edit=user.id;$('#user-dialog').setAttribute('aria-label','重命名用户');
+      $('#user-name').value=user.name;$('#user-dialog').showModal();$('#user-name').select();break;
+    case 'toggle':
+      await busy(button,async()=>{
+        await api('/users/'+user.id,{method:'PATCH',body:JSON.stringify({enabled:!user.enabled})});
+        toast(user.enabled?'用户已禁用':'用户已启用');state.usersLoadedAt=0;await refresh();
+      });break;
+    case 'reset':
+      if(!await confirmAction('重置「'+user.name+'」的订阅'))break;
+      await busy(button,async()=>{
+        const updated=await api('/users/'+user.id+'/reset',{method:'POST',body:'{}'});
+        state.usersLoadedAt=0;await refresh();subscription(updated);toast('订阅已重置');
+      });break;
+  }
+});
 $('#add-user').addEventListener('click',()=>{state.edit=null;$('#user-dialog').setAttribute('aria-label','新增用户');$('#user-name').value='';$('#user-dialog').showModal();});
 $('#user-form').addEventListener('submit',async event=>{event.preventDefault();await busy(event.submitter,async()=>{const user=await api(state.edit?'/users/'+state.edit:'/users',{method:state.edit?'PATCH':'POST',body:JSON.stringify({name:$('#user-name').value})});$('#user-dialog').close();state.usersLoadedAt=0;await refresh();if(!state.edit)subscription(user);toast('用户已保存');});});
-$('#confirm-action').addEventListener('click',event=>busy(event.currentTarget,async()=>{const user=await api('/users/'+event.currentTarget.dataset.id+'/reset',{method:'POST',body:'{}'});$('#confirm-dialog').close();state.usersLoadedAt=0;await refresh();subscription(user);toast('订阅已重置');}));
 $('#limits-form').addEventListener('submit',event=>{event.preventDefault();busy(event.submitter,async()=>{const body={};for(const [key,unit] of [['total_bytes',1024**3],['daily_bytes',1024**3],['speed_bps',1e6]]){const value=Number($('#limit-'+key).value||0),amount=Math.round(value*unit);if(!Number.isFinite(value)||value<0||!Number.isSafeInteger(amount)||value>0&&amount<1)throw new Error('请输入有效的非负上限，留空或 0 表示不限');body[key]=amount;}const data=await api('/users/'+limitsUserId+'/limits',{method:'PATCH',body:JSON.stringify(body)});renderLimitUsage(data);state.usersLoadedAt=0;await refresh();$('#limits-dialog').close();toast(data.ready?(data.blocked?'限制已保存，该账号额度已用尽':'流量限制已保存'):'设置已保存，等待限流服务恢复');});});
 $('#limits-clear').addEventListener('click',()=>{for(const key of ['total_bytes','daily_bytes','speed_bps'])$('#limit-'+key).value='';});
 $('#copy-clash').addEventListener('click',()=>copy('#clash-link'));$('#copy-rocket').addEventListener('click',()=>copy('#rocket-link'));
-$('#users-search-form').addEventListener('submit',event=>{event.preventDefault();state.userFilter=$('#users-user-filter').value;resetPagination('users');renderUsers();$('#user-cards').parentElement.scrollTop=0;});
-$('#users-search-form').addEventListener('reset',()=>{state.userFilter='';resetPagination('users');renderUsers();});
+$('#users-user-filter').addEventListener('change',event=>{
+  state.userFilter=event.target.value;
+  resetPagination('users');
+  renderUsers();
+  $('#user-cards').parentElement.scrollTop=0;
+});
 $('#activity-search-form').addEventListener('submit',event=>{event.preventDefault();busy(event.submitter,async()=>{state.activityFilter=$('#activity-user-filter').value;state.activitySearch=$('#domain-search').value.trim();resetPagination('activity');$('#activity-table').scrollTop=0;await renderActivity();});});
 $('#activity-search-form').addEventListener('reset',()=>{state.activityFilter='';state.activitySearch='';resetPagination('activity');$('#activity-table').scrollTop=0;renderActivity().catch(error=>toast(error.message));});
 $('#overview-reset').addEventListener('click',()=>{state.filter='';resetPagination('usage');refresh();});
@@ -195,4 +257,10 @@ renderTrendFilters();
 $('#logout').addEventListener('click',event=>busy(event.currentTarget,async()=>{await api('/logout',{method:'POST',body:'{}'});showLogin();}));
 $('#password-form').addEventListener('submit',event=>{event.preventDefault();busy(event.submitter,async()=>{await api('/password',{method:'POST',body:JSON.stringify({current:$('#old-password').value,password:$('#new-password').value})});event.target.reset();toast('管理员密码已更新');});});
 setInterval(()=>{if(document.hidden||!state.csrf)return;refreshRates();refreshResources();if(state.page==='egress-dashboard')refreshEgressRates();if(state.page!=='settings'&&Date.now()-state.lastFullRefresh>=15000)refresh();},5000);
-document.addEventListener('DOMContentLoaded',()=>api('/me').then(data=>data.authenticated?enter(data):showLogin()).catch(()=>showLogin()));
+document.addEventListener('DOMContentLoaded',()=>{
+  const menu=$('#mobile-page');
+  for(const link of document.querySelectorAll('#desktop-nav a'))menu.add(new Option(link.textContent, link.dataset.page));
+  menu.addEventListener('change',()=>page(menu.value));
+  window.addEventListener('hashchange',()=>{if(state.csrf)page(location.hash.slice(1),false);});
+  api('/me').then(data=>data.authenticated?enter(data):showLogin()).catch(()=>showLogin());
+});
