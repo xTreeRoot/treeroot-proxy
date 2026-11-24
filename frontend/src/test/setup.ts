@@ -36,3 +36,7 @@ Object.defineProperty(HTMLElement.prototype, "scrollTo", { value: vi.fn() });
 window.echarts = {
   init: () => ({ setOption: vi.fn(), resize: vi.fn(), dispose: vi.fn() }),
 };
+
+// jsdom cannot measure pseudo-element scrollbars; Ant Design also reads normal computed styles.
+const computedStyle = window.getComputedStyle.bind(window);
+window.getComputedStyle = (element) => computedStyle(element);

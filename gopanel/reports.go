@@ -31,7 +31,7 @@ func (app *panel) overview(ctx context.Context, tx *sql.Tx, r *http.Request) (an
 		where, condition, domainWhere, args = " WHERE id=?", " AND user_id=?", " WHERE user_id=?", []any{id}
 	}
 	now := unixNow()
-	result, err := one(ctx, tx, `SELECT COALESCE(SUM(upload),0) upload,COALESCE(SUM(download),0) download,COUNT(*) users,COALESCE(SUM(enabled),0) active FROM users`+where, args...)
+	result, err := one(ctx, tx, `SELECT COALESCE(SUM(upload),0) upload,COALESCE(SUM(download),0) download,COALESCE(SUM(CASE WHEN NOT EXISTS(SELECT 1 FROM user_archives a WHERE a.user_id=users.id) THEN 1 ELSE 0 END),0) users,COALESCE(SUM(enabled),0) active FROM users`+where, args...)
 	if err != nil {
 		return nil, err
 	}

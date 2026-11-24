@@ -265,6 +265,9 @@ def check_candidate(staging):
         copy.execute('INSERT INTO sessions VALUES(?,?,?)',
                      (hashlib.sha256(token.encode()).hexdigest(), csrf, int(time.time()) + 60))
         before = [copy.execute(sql).fetchall() for sql in identity_sql]
+        archives_before = (copy.execute('SELECT user_id,deleted_at FROM user_archives ORDER BY user_id').fetchall()
+                           if copy.execute("SELECT 1 FROM sqlite_master WHERE name='user_archives' AND type='table'").fetchone()
+                           else [])
     configuration.update(data_dir=str(isolated), egress_dir=str(isolated / 'egress'))
     config_file = isolated / 'config.json'
     config_file.write_text(json.dumps(configuration))
@@ -280,7 +283,7 @@ def check_candidate(staging):
             if not address.startswith('127.0.0.1:'):
                 raise RuntimeError('Go panel preflight startup failed')
             health(address, staging, limits=False)
-            for route in ('me', 'users', 'server', 'resources', 'overview', 'activity', 'egress',
+            for route in ('me', 'users', 'users?deleted=true', 'server', 'resources', 'overview', 'activity', 'egress',
                           'egress/overview', 'egress/records?search=example', 'egress/blacklist'):
                 request = urllib.request.Request(f'http://{address}/api/{route}',
                                                  headers={'Cookie': '__Host-treeroot=' + token})
@@ -290,7 +293,8 @@ def check_candidate(staging):
                 str(staging / GO_BINARY), '-backup')
             with closing(sqlite3.connect(path)) as checked:
                 if (checked.execute('PRAGMA quick_check').fetchone() != ('ok',) or
-                        [checked.execute(sql).fetchall() for sql in identity_sql] != before):
+                        [checked.execute(sql).fetchall() for sql in identity_sql] != before or
+                        checked.execute('SELECT user_id,deleted_at FROM user_archives ORDER BY user_id').fetchall() != archives_before):
                     raise RuntimeError('Go preflight database or identity validation failed')
         finally:
             if process.poll() is None:

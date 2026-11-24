@@ -1,12 +1,15 @@
+import type { TableRef } from "antd/es/table";
+import { Input, type TableColumnsType } from "antd";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Search, RotateCcw } from "lucide-react";
 import {
   Badge,
   Button,
-  Empty,
   Feedback,
   Pagination,
   UserSelect,
+  SelectField,
+  DataTable,
   useRemote,
 } from "../components";
 import { bytes, date, number, period } from "../lib";
@@ -94,7 +97,7 @@ export function RecordsPage({
     size: number;
     anchor: number | null;
   }>({ page: 1, size: 25, anchor: null });
-  const table = useRef<HTMLDivElement>(null);
+  const table = useRef<TableRef>(null);
   const activeDevices = useRemote<Device[]>(
     ["devices", "active"],
     "/egress",
@@ -174,53 +177,63 @@ export function RecordsPage({
           <>
             <label className="field">
               <span>电脑</span>
-              <select
-                aria-label="筛选电脑"
+              <SelectField
+                label="筛选电脑"
                 value={draft.device_id}
-                onChange={(e) => update("device_id", e.target.value)}
-              >
-                <option value="">全部电脑</option>
-                {devices.map((device) => (
-                  <option key={device.id} value={device.id}>
-                    {device.name}
-                    {deletedDevices.data?.some((item) => item.id === device.id)
-                      ? "（已删除）"
-                      : ""}
-                  </option>
-                ))}
-              </select>
+                onChange={(value) => update("device_id", value)}
+                searchable
+                options={[
+                  { value: "", label: "全部电脑" },
+                  ...devices.map((device) => ({
+                    value: device.id,
+                    label:
+                      device.name +
+                      (deletedDevices.data?.some(
+                        (item) => item.id === device.id,
+                      )
+                        ? "（已删除）"
+                        : ""),
+                  })),
+                ]}
+              />
             </label>
             <label className="field">
               <span>记录类型</span>
-              <select
+              <SelectField
+                label="记录类型"
                 value={draft.kind}
-                onChange={(e) => update("kind", e.target.value)}
-              >
-                <option value="">全部类型</option>
-                <option value="request">出口访问</option>
-                <option value="device">设备事件</option>
-              </select>
+                onChange={(value) => update("kind", value)}
+                options={[
+                  { value: "", label: "全部类型" },
+                  { value: "request", label: "出口访问" },
+                  { value: "device", label: "设备事件" },
+                ]}
+              />
             </label>
             <label className="field">
               <span>结果</span>
-              <select
+              <SelectField
+                label="结果"
                 value={draft.outcome}
-                onChange={(e) => update("outcome", e.target.value)}
-              >
-                <option value="">全部结果</option>
-                <option value="success">成功</option>
-                <option value="failed">失败</option>
-              </select>
+                onChange={(value) => update("outcome", value)}
+                options={[
+                  { value: "", label: "全部结果" },
+                  { value: "success", label: "成功" },
+                  { value: "failed", label: "失败" },
+                ]}
+              />
             </label>
             <label className="field">
               <span>统计范围</span>
-              <select
+              <SelectField
+                label="统计范围"
                 value={draft.hours}
-                onChange={(e) => update("hours", e.target.value)}
-              >
-                <option value="168">最近 7 天</option>
-                <option value="24">最近 24 小时</option>
-              </select>
+                onChange={(value) => update("hours", value)}
+                options={[
+                  { value: "168", label: "最近 7 天" },
+                  { value: "24", label: "最近 24 小时" },
+                ]}
+              />
             </label>
           </>
         ) : (
@@ -236,7 +249,7 @@ export function RecordsPage({
         )}
         <label className="field search-domain">
           <span>域名 / IP</span>
-          <input
+          <Input
             type="search"
             value={draft.search}
             maxLength={253}
@@ -269,49 +282,19 @@ export function RecordsPage({
         />
       )}
       <div
-        ref={table}
-        className="table-scroll record-scroll"
-        tabIndex={0}
+        className="record-table-container"
         aria-label={egress ? "电脑出口详细记录表格" : "访问记录表格"}
         aria-busy={query.isFetching}
       >
-        <table>
-          <thead>
-            <tr>
-              <th>连接时间</th>
-              <th>{egress ? "电脑" : "用户"}</th>
-              {egress && (
-                <>
-                  <th>记录类型</th>
-                  <th>事件</th>
-                </>
-              )}
-              <th>目标域名 / IP</th>
-              <th>端口</th>
-              {egress ? (
-                <>
-                  <th>方法</th>
-                  <th>结果</th>
-                  <th>上传</th>
-                  <th>下载</th>
-                  <th>耗时</th>
-                  <th>最近检测出口 IP</th>
-                  <th>详情</th>
-                </>
-              ) : (
-                <th>传输</th>
-              )}
-            </tr>
-          </thead>
-          <tbody>
-            {data?.items.map((item) => (
-              <RecordRow key={item.id} item={item} egress={egress} />
-            ))}
-          </tbody>
-        </table>
-        {!query.isPending && !data?.items.length && (
-          <Empty>{query.error ? "记录暂不可用" : "暂无匹配记录"}</Empty>
-        )}
+        <DataTable<RecordItem>
+          tableRef={table}
+          rowKey="id"
+          data={data?.items || []}
+          columns={recordColumns(egress)}
+          loading={query.isPending}
+          height="min(62dvh, 520px)"
+          empty={query.error ? "记录暂不可用" : "暂无匹配记录"}
+        />
       </div>
       <Pagination
         page={data?.page || paging.page}
@@ -327,53 +310,126 @@ export function RecordsPage({
     </article>
   );
 }
-function RecordRow({ item, egress }: { item: RecordItem; egress: boolean }) {
-  const request = item.kind === "request";
-  return (
-    <tr>
-      <td className="numeric">{date(item.ts)}</td>
-      <td className="table-identity">{item.name}</td>
-      {egress && (
-        <>
-          <td>{request ? "出口访问" : "设备事件"}</td>
-          <td>{eventNames[item.action || ""] || item.action}</td>
-        </>
-      )}
-      <td className="domain-cell" title={item.domain}>
-        {item.domain || "—"}
-      </td>
-      <td className="numeric">{item.port || "—"}</td>
-      {egress ? (
-        <>
-          <td>{item.method || "—"}</td>
-          <td>
-            <Badge tone={item.outcome === "success" ? "success" : "danger"}>
-              {item.outcome === "success"
-                ? request
-                  ? "已连接"
-                  : "成功"
-                : "失败"}
-            </Badge>
-          </td>
-          <td className="numeric">{request ? bytes(item.upload) : "—"}</td>
-          <td className="numeric">{request ? bytes(item.download) : "—"}</td>
-          <td className="numeric">
-            {request
-              ? (item.duration_ms || 0) < 1000
-                ? number(item.duration_ms || 0) + " ms"
-                : ((item.duration_ms || 0) / 1000).toFixed(2) + " s"
-              : "—"}
-          </td>
-          <td>{item.exit_ip || "—"}</td>
-          <td className="detail-cell">
-            {details[item.detail || ""] || item.detail || "—"}
-          </td>
-        </>
-      ) : (
-        <td>
-          <span className="tag">{item.network?.toUpperCase()}</span>
-        </td>
-      )}
-    </tr>
+function recordColumns(egress: boolean): TableColumnsType<RecordItem> {
+  const columns: TableColumnsType<RecordItem> = [
+    {
+      title: "连接时间",
+      key: "time",
+      width: 150,
+      render: (_, item) => date(item.ts),
+    },
+    {
+      title: egress ? "电脑" : "用户",
+      dataIndex: "name",
+      key: "name",
+      width: 140,
+      className: "table-identity",
+    },
+  ];
+  if (egress)
+    columns.push(
+      {
+        title: "记录类型",
+        key: "kind",
+        width: 100,
+        render: (_, item) =>
+          item.kind === "request" ? "出口访问" : "设备事件",
+      },
+      {
+        title: "事件",
+        key: "action",
+        width: 120,
+        render: (_, item) => eventNames[item.action || ""] || item.action,
+      },
+    );
+  columns.push(
+    {
+      title: "目标域名 / IP",
+      dataIndex: "domain",
+      key: "domain",
+      width: 220,
+      ellipsis: true,
+      render: (value) => value || "—",
+    },
+    {
+      title: "端口",
+      key: "port",
+      width: 80,
+      render: (_, item) => item.port || "—",
+    },
   );
+  if (!egress)
+    columns.push({
+      title: "传输",
+      key: "network",
+      width: 90,
+      render: (_, item) => (
+        <span className="tag">{item.network?.toUpperCase()}</span>
+      ),
+    });
+  else
+    columns.push(
+      {
+        title: "方法",
+        key: "method",
+        width: 100,
+        render: (_, item) => item.method || "—",
+      },
+      {
+        title: "结果",
+        key: "outcome",
+        width: 110,
+        render: (_, item) => (
+          <Badge tone={item.outcome === "success" ? "success" : "danger"}>
+            {item.outcome === "success"
+              ? item.kind === "request"
+                ? "已连接"
+                : "成功"
+              : "失败"}
+          </Badge>
+        ),
+      },
+      {
+        title: "上传",
+        key: "upload",
+        width: 110,
+        align: "right",
+        render: (_, item) =>
+          item.kind === "request" ? bytes(item.upload) : "—",
+      },
+      {
+        title: "下载",
+        key: "download",
+        width: 110,
+        align: "right",
+        render: (_, item) =>
+          item.kind === "request" ? bytes(item.download) : "—",
+      },
+      {
+        title: "耗时",
+        key: "duration",
+        width: 100,
+        align: "right",
+        render: (_, item) =>
+          item.kind !== "request"
+            ? "—"
+            : (item.duration_ms || 0) < 1000
+              ? number(item.duration_ms || 0) + " ms"
+              : ((item.duration_ms || 0) / 1000).toFixed(2) + " s",
+      },
+      {
+        title: "最近检测出口 IP",
+        key: "ip",
+        width: 160,
+        render: (_, item) => item.exit_ip || "—",
+      },
+      {
+        title: "详情",
+        key: "detail",
+        width: 260,
+        className: "detail-cell",
+        render: (_, item) => details[item.detail || ""] || item.detail || "—",
+      },
+    );
+  return columns;
 }

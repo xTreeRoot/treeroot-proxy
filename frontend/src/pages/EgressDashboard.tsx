@@ -1,3 +1,4 @@
+import { Segmented } from "antd";
 import { useEffect, useState } from "react";
 import {
   ArrowDownToLine,
@@ -11,9 +12,10 @@ import {
   Badge,
   Button,
   DomainRanking,
-  Empty,
   Feedback,
   Metric,
+  SelectField,
+  DataTable,
   TrafficChart,
   Transfer,
   useRemote,
@@ -21,6 +23,7 @@ import {
 import { bytes, date, number, period, speed, successRate } from "../lib";
 import type {
   DeviceOption,
+  DeviceUsage,
   EgressOverview,
   Rates,
   RecordScope,
@@ -75,27 +78,29 @@ export function EgressDashboard({
     <div className="page-stack">
       <div className="toolbar">
         <div className="toolbar-group">
-          <select
-            aria-label="筛选电脑"
+          <SelectField
+            label="筛选电脑"
             value={device}
-            onChange={(e) => setDevice(e.target.value)}
-          >
-            <option value="">全部电脑</option>
-            {options.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-                {item.deleted ? "（已删除）" : ""}
-              </option>
-            ))}
-          </select>
-          <select
+            onChange={setDevice}
+            searchable
+            options={[
+              { value: "", label: "全部电脑" },
+              ...options.map((item) => ({
+                value: item.id,
+                label: item.name + (item.deleted ? "（已删除）" : ""),
+              })),
+            ]}
+          />
+          <Segmented
+            className="period-control"
             aria-label="趋势与用量范围"
             value={period(hours)}
-            onChange={(e) => setHours(period(e.target.value))}
-          >
-            <option value="24">最近 24 小时</option>
-            <option value="168">最近 7 天</option>
-          </select>
+            onChange={(value) => setHours(period(String(value)))}
+            options={[
+              { value: "24", label: "最近 24 小时" },
+              { value: "168", label: "最近 7 天" },
+            ]}
+          />
         </div>
         <Button onClick={() => openRecords(device)}>查看详细记录 →</Button>
       </div>
@@ -191,75 +196,93 @@ export function EgressDashboard({
         </article>
       </div>
       <article className="panel table-panel" aria-label="各电脑出口流量统计">
-        <div className="table-scroll" tabIndex={0}>
-          {data?.devices.length ? (
-            <table>
-              <thead>
-                <tr>
-                  <th>电脑</th>
-                  <th>当前状态</th>
-                  <th>驱动版本</th>
-                  <th>总流量</th>
-                  <th>上传</th>
-                  <th>下载</th>
-                  <th>连接数</th>
-                  <th>成功率</th>
-                  <th>最近连接记录</th>
-                  <th aria-label="操作" />
-                </tr>
-              </thead>
-              <tbody>
-                {data.devices.map((item) => (
-                  <tr key={item.id}>
-                    <td className="table-identity">{item.name}</td>
-                    <td>
-                      <Badge
-                        tone={
-                          item.deleted || !item.enabled
-                            ? "neutral"
-                            : item.online
-                              ? "success"
-                              : "warning"
-                        }
-                      >
-                        {item.deleted
-                          ? "已删除"
-                          : item.online
-                            ? "在线"
-                            : item.enabled
-                              ? "离线"
-                              : "已停用"}
-                      </Badge>
-                    </td>
-                    <td>{item.driver_version || "未上报"}</td>
-                    <td className="numeric">
-                      {bytes(item.upload + item.download)}
-                    </td>
-                    <td className="numeric">{bytes(item.upload)}</td>
-                    <td className="numeric">{bytes(item.download)}</td>
-                    <td className="numeric">{number(item.connections)}</td>
-                    <td className="numeric">
-                      {successRate(item.connections, item.succeeded)}
-                    </td>
-                    <td className="numeric">{date(item.last_record)}</td>
-                    <td>
-                      <Button
-                        variant="text"
-                        onClick={() => openRecords(item.id)}
-                      >
-                        查看明细
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <Empty>
-              {query.isPending ? "正在获取用量" : "暂无电脑出口用量"}
-            </Empty>
-          )}
-        </div>
+        <DataTable<DeviceUsage>
+          rowKey="id"
+          data={data?.devices || []}
+          loading={query.isPending}
+          empty="暂无电脑出口用量"
+          columns={[
+            {
+              title: "电脑",
+              dataIndex: "name",
+              key: "name",
+              className: "table-identity",
+            },
+            {
+              title: "当前状态",
+              key: "status",
+              render: (_, item) => (
+                <Badge
+                  tone={
+                    item.deleted || !item.enabled
+                      ? "neutral"
+                      : item.online
+                        ? "success"
+                        : "warning"
+                  }
+                >
+                  {item.deleted
+                    ? "已删除"
+                    : item.online
+                      ? "在线"
+                      : item.enabled
+                        ? "离线"
+                        : "已停用"}
+                </Badge>
+              ),
+            },
+            {
+              title: "驱动版本",
+              key: "version",
+              render: (_, item) => item.driver_version || "未上报",
+            },
+            {
+              title: "总流量",
+              key: "total",
+              align: "right",
+              render: (_, item) => bytes(item.upload + item.download),
+            },
+            {
+              title: "上传",
+              key: "upload",
+              align: "right",
+              render: (_, item) => bytes(item.upload),
+            },
+            {
+              title: "下载",
+              key: "download",
+              align: "right",
+              render: (_, item) => bytes(item.download),
+            },
+            {
+              title: "连接数",
+              key: "connections",
+              align: "right",
+              render: (_, item) => number(item.connections),
+            },
+            {
+              title: "成功率",
+              key: "success",
+              align: "right",
+              render: (_, item) =>
+                successRate(item.connections, item.succeeded),
+            },
+            {
+              title: "最近连接记录",
+              key: "last",
+              render: (_, item) => date(item.last_record),
+            },
+            {
+              title: "操作",
+              key: "actions",
+              render: (_, item) => (
+                <Button variant="text" onClick={() => openRecords(item.id)}>
+                  查看明细
+                </Button>
+              ),
+            },
+          ]}
+        />
       </article>
     </div>
   );

@@ -1,3 +1,4 @@
+import { Input } from "antd";
 import { useEffect, useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -16,6 +17,7 @@ import {
   Badge,
   Button,
   CopyField,
+  DataTable,
   Empty,
   Feedback,
   Modal,
@@ -300,7 +302,7 @@ export function EgressPage({ active }: { active: boolean }) {
           <form onSubmit={submit}>
             <label className="field">
               <span>电脑名称</span>
-              <input
+              <Input
                 autoFocus
                 required
                 maxLength={64}
@@ -379,7 +381,7 @@ function BlacklistModal({ close }: { close: () => void }) {
       <form className="blacklist-form" onSubmit={submit}>
         <label className="field">
           <span>精确主机</span>
-          <input
+          <Input
             id="blacklist-host"
             autoFocus
             required
@@ -411,69 +413,76 @@ function BlacklistModal({ close }: { close: () => void }) {
         {query.data?.filter((rule) => rule.enabled).length || 0} 条启用 ·{" "}
         {query.data?.length || 0} 条规则
       </div>
-      <div className="table-scroll blacklist-table" tabIndex={0}>
-        <table>
-          <thead>
-            <tr>
-              <th>精确主机</th>
-              <th>状态</th>
-              <th>更新时间</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {query.data?.map((rule) => (
-              <tr key={rule.id}>
-                <td className="table-identity">{rule.host}</td>
-                <td>
-                  <Badge tone={rule.enabled ? "success" : "neutral"}>
-                    {rule.enabled ? "已启用" : "已停用"}
-                  </Badge>
-                </td>
-                <td>{date(rule.updated)}</td>
-                <td>
-                  <div className="table-actions">
-                    <Button
-                      variant="text"
-                      disabled={!!pending}
-                      onClick={() => {
-                        setEdit(rule.id);
-                        setHost(rule.host);
-                      }}
-                    >
-                      编辑
-                    </Button>
-                    <Button
-                      variant="text"
-                      disabled={!!pending}
-                      onClick={() =>
-                        run("toggle", async () => {
-                          await write("/egress/blacklist/" + rule.id, "PATCH", {
-                            enabled: !rule.enabled,
-                          });
-                          await refresh();
-                        })
-                      }
-                    >
-                      {rule.enabled ? "停用" : "启用"}
-                    </Button>
-                    <Button
-                      variant="text"
-                      className="danger-text"
-                      disabled={!!pending}
-                      onClick={() => remove(rule)}
-                    >
-                      删除
-                    </Button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {!query.isPending && !query.data?.length && (
-          <Empty>暂无黑名单规则</Empty>
-        )}
+      <div className="blacklist-table">
+        <DataTable<BlacklistRule>
+          rowKey="id"
+          data={query.data || []}
+          loading={query.isPending}
+          height="45dvh"
+          empty="暂无黑名单规则"
+          columns={[
+            {
+              title: "精确主机",
+              dataIndex: "host",
+              key: "host",
+              className: "table-identity",
+            },
+            {
+              title: "状态",
+              key: "state",
+              render: (_, rule) => (
+                <Badge tone={rule.enabled ? "success" : "neutral"}>
+                  {rule.enabled ? "已启用" : "已停用"}
+                </Badge>
+              ),
+            },
+            {
+              title: "更新时间",
+              key: "updated",
+              render: (_, rule) => date(rule.updated),
+            },
+            {
+              title: "操作",
+              key: "actions",
+              render: (_, rule) => (
+                <div className="table-actions">
+                  <Button
+                    variant="text"
+                    disabled={!!pending}
+                    onClick={() => {
+                      setEdit(rule.id);
+                      setHost(rule.host);
+                    }}
+                  >
+                    编辑
+                  </Button>
+                  <Button
+                    variant="text"
+                    disabled={!!pending}
+                    onClick={() =>
+                      run("toggle", async () => {
+                        await write("/egress/blacklist/" + rule.id, "PATCH", {
+                          enabled: !rule.enabled,
+                        });
+                        await refresh();
+                      })
+                    }
+                  >
+                    {rule.enabled ? "停用" : "启用"}
+                  </Button>
+                  <Button
+                    variant="text"
+                    className="danger-text"
+                    disabled={!!pending}
+                    onClick={() => remove(rule)}
+                  >
+                    删除
+                  </Button>
+                </div>
+              ),
+            },
+          ]}
+        />
       </div>
     </Modal>
   );

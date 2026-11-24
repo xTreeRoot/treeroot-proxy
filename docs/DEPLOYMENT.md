@@ -27,7 +27,11 @@ python3 ops/manage.py status
 
 发布包不会包含 `private/`、数据库、生产配置或运维文档，也不会改 DNS。只有修改文档或 `ops/` 时，不需要为了文档发布应用；运维助手会在下一次调用时经 SSH 上传。
 
-前端源码在 `frontend/src/`，页面为 React/TypeScript，样式使用项目内 CSS 变量；`frontend/package-lock.json` 固定依赖。不要手改生成的根目录 `app.js`、`style.css`、`index.html`。发布机只接收构建结果，不安装 Node.js 或 `node_modules`。源码备份包包含 `frontend/` 源码和锁文件，排除 `node_modules/`、`dist/`、测试覆盖率与私密文件。首次安装或依赖变化后先执行 `npm --prefix frontend ci`；缺少依赖时构建失败会中止发布。旧 `egress.js` / `egress.css` 未被新入口加载。
+前端源码在 `frontend/src/`，页面为 React/TypeScript，操作控件使用 Ant Design，样式使用项目内 CSS 变量与统一主题 token；`frontend/package-lock.json` 固定依赖。不要手改生成的根目录 `app.js`、`style.css`、`index.html`。发布机只接收构建结果，不安装 Node.js 或 `node_modules`。源码备份包包含 `frontend/` 源码和锁文件，排除 `node_modules/`、`dist/`、测试覆盖率与私密文件。
+
+用户可恢复删除采用兼容新增表 `user_archives(user_id,deleted_at)`，迁移与原有增量表在同一事务中执行，可重复启动。部署预验证在生产数据库副本确认身份、累计数与已有归档状态不变；删除/恢复及 Xray 失败回滚在独立测试库验证，不操作真实账号。回退代码保留新表与最新数据库，旧版会显示归档账号为普通停用账号，订阅继续停用；重新升级后恢复归档视图。不要清空或重建用户数据。
+
+首次安装或依赖变化后先执行 `npm --prefix frontend ci`；缺少依赖时构建失败会中止发布。旧 `egress.js` / `egress.css` 未被新入口加载。
 
 UI 修改还需在 Codex 内浏览器验证桌面和手机布局、控制台、静态资源、筛选分页、键盘/弹窗退出；交互写入使用 `tests/ui_fixture.py` 的独立 Go 测试实例，禁止拿线上真实用户做重置、改密或删除测试。
 

@@ -51,6 +51,7 @@ const egress: EgressOverview = {
 const clients: QueryClient[] = [];
 let authenticated = true,
   users: User[],
+  archivedUsers: User[],
   requests: { path: string; options: RequestInit }[],
   overviewDelay: Promise<EgressOverview> | undefined;
 const respond = (data: unknown, status = 200) =>
@@ -62,6 +63,7 @@ const respond = (data: unknown, status = 200) =>
 beforeEach(() => {
   authenticated = true;
   users = seedUsers();
+  archivedUsers = [];
   requests = [];
   overviewDelay = undefined;
   setCSRF("");
@@ -92,7 +94,9 @@ beforeEach(() => {
           users.push(user);
           return respond(user);
         }
-        return respond(users);
+        return respond(
+          url.searchParams.get("deleted") === "true" ? archivedUsers : users,
+        );
       }
       if (/\/users\/\d+\/limits$/.test(path))
         return respond({
@@ -105,7 +109,30 @@ beforeEach(() => {
           ready: true,
         });
       if (/\/users\/\d+\/reset$/.test(path)) return respond(users[0]);
-      if (/\/users\/\d+$/.test(path)) return respond(users[0]);
+      if (/\/users\/\d+\/restore$/.test(path)) {
+        const id = Number(path.split("/")[3]);
+        const user = archivedUsers.find((item) => item.id === id)!;
+        archivedUsers = archivedUsers.filter((item) => item.id !== id);
+        const restored = { ...user, deleted: false, enabled: 0 };
+        users.push(restored);
+        users.sort((a, b) => a.id - b.id);
+        return respond(restored);
+      }
+      if (/\/users\/\d+$/.test(path)) {
+        if (options.method === "DELETE") {
+          const id = Number(path.split("/")[3]);
+          const user = users.find((item) => item.id === id)!;
+          archivedUsers.push({
+            ...user,
+            enabled: 0,
+            deleted: true,
+            deleted_at: now,
+          });
+          users = users.filter((item) => item.id !== id);
+          return respond({ ok: true });
+        }
+        return respond(users[0]);
+      }
       if (path === "/api/resources")
         return respond({
           cpu_percent: 12,
@@ -233,6 +260,11 @@ const clickNav = (name: string) =>
     ),
   );
 
+async function choose(scope: HTMLElement, label: string, option: string) {
+  await userEvent.click(within(scope).getByRole("combobox", { name: label }));
+  await userEvent.click(await screen.findByRole("option", { name: option }));
+}
+
 describe("React page interactions", () => {
   it("waits for login and accepts the existing login response without an authenticated field", async () => {
     authenticated = false;
@@ -248,25 +280,20 @@ describe("React page interactions", () => {
     mount("users");
     const section = await screen.findByRole("region", { name: "用户与订阅" });
     await within(section).findByText("测试用户 1", { selector: "strong" });
+    await choose(section, "每页数量", "6 / 页");
     await userEvent.click(
       within(section).getByRole("button", { name: "下一页" }),
     );
     expect(
       within(section).getByText("测试用户 7", { selector: "strong" }),
     ).toBeTruthy();
-    await userEvent.selectOptions(
-      within(section).getByRole("combobox", { name: "筛选用户" }),
-      "1",
-    );
+    await choose(section, "筛选用户", "测试用户 1");
     await clickNav("运行概览");
     await clickNav("用户与订阅");
+    expect(within(section).getAllByRole("article")).toHaveLength(1);
     expect(
-      (
-        within(section).getByRole("combobox", {
-          name: "筛选用户",
-        }) as HTMLSelectElement
-      ).value,
-    ).toBe("1");
+      within(section).getByText("测试用户 1", { selector: "strong" }),
+    ).toBeTruthy();
     await userEvent.click(
       within(section).getByRole("button", { name: "测试用户 1的流量限制" }),
     );
@@ -314,8 +341,13 @@ describe("React page interactions", () => {
     );
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByText(users[0].name)).toBeTruthy();
-    fireEvent(dialog, new Event("cancel", { cancelable: true }));
+    fireEvent.keyDown(dialog, { key: "Escape", code: "Escape", keyCode: 27 });
     expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        within(card).getByRole("button", { name: "重置订阅" }),
+      ),
+    );
     expect(requests.some((item) => item.path.endsWith("/reset"))).toBe(false);
     await userEvent.click(
       within(card).getByRole("button", { name: "重置订阅" }),
@@ -343,10 +375,7 @@ describe("React page interactions", () => {
         ),
       ).toBe(true),
     );
-    await userEvent.selectOptions(
-      within(section).getByRole("combobox", { name: "每页数量" }),
-      "50",
-    );
+    await choose(section, "每页数量", "50 / 页");
     await waitFor(() =>
       expect(within(section).getAllByText("example.org")).toHaveLength(50),
     );
@@ -371,9 +400,10 @@ describe("React page interactions", () => {
     const section = await screen.findByRole("region", { name: "出口流量大盘" });
     await within(section).findByText("300 B");
     expect(within(section).getAllByText("1 / 2 台上报")).toHaveLength(2);
-    await userEvent.selectOptions(
-      within(section).getByRole("combobox", { name: "趋势与用量范围" }),
-      "168",
+    await userEvent.click(
+      within(section)
+        .getByRole("radio", { name: "最近 7 天" })
+        .closest("label")!,
     );
     await waitFor(() =>
       expect(requests.some((item) => item.path.includes("hours=168"))).toBe(
@@ -385,14 +415,8 @@ describe("React page interactions", () => {
     overviewDelay = new Promise((value) => {
       resolve = value;
     });
-    await userEvent.selectOptions(
-      within(section).getByRole("combobox", { name: "筛选电脑" }),
-      "fixture-device",
-    );
-    await userEvent.selectOptions(
-      within(section).getByRole("combobox", { name: "筛选电脑" }),
-      "",
-    );
+    await choose(section, "筛选电脑", "测试电脑");
+    await choose(section, "筛选电脑", "全部电脑");
     resolve({ ...egress, total_download: 999999 });
     await waitFor(() =>
       expect(within(section).getByText("300 B")).toBeTruthy(),
@@ -410,5 +434,70 @@ describe("React page interactions", () => {
         ),
       ).toBe(true),
     );
+  });
+  it("confirms the delete target and restores a disabled user with history", async () => {
+    users = users.slice(0, 2);
+    mount("users");
+    const section = await screen.findByRole("region", { name: "用户与订阅" });
+    const name = await within(section).findByText("测试用户 1", {
+      selector: "strong",
+    });
+    const original = { ...users[0] };
+    await userEvent.click(
+      within(name.closest("article")!).getByRole("button", { name: "删除" }),
+    );
+    let dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("测试用户 1")).toBeTruthy();
+    await userEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(requests.some((item) => item.options.method === "DELETE")).toBe(
+      false,
+    );
+    await userEvent.click(
+      within(name.closest("article")!).getByRole("button", { name: "删除" }),
+    );
+    dialog = screen.getByRole("dialog");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "删除用户" }),
+    );
+    await waitFor(() =>
+      expect(
+        within(section).queryByText("测试用户 1", { selector: "strong" }),
+      ).toBeNull(),
+    );
+    expect(
+      requests.find(
+        (item) =>
+          item.path === "/api/users/1" && item.options.method === "DELETE",
+      ),
+    ).toBeTruthy();
+    await userEvent.click(
+      within(section).getByRole("button", { name: "已删除用户" }),
+    );
+    const archived = await within(section).findByText("测试用户 1", {
+      selector: "strong",
+    });
+    expect(
+      within(archived.closest("article")!).getByText("5.0 KB"),
+    ).toBeTruthy();
+    await userEvent.click(
+      within(archived.closest("article")!).getByRole("button", {
+        name: "恢复用户",
+      }),
+    );
+    await waitFor(() => expect(archivedUsers).toHaveLength(0));
+    await userEvent.click(
+      within(section).getByRole("button", { name: "返回用户列表" }),
+    );
+    const restored = await within(section).findByText("测试用户 1", {
+      selector: "strong",
+    });
+    expect(
+      within(restored.closest("article")!).getByText("已禁用"),
+    ).toBeTruthy();
+    expect(users.find((item) => item.id === 1)).toMatchObject({
+      ...original,
+      enabled: 0,
+      deleted: false,
+    });
   });
 });

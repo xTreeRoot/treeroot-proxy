@@ -173,7 +173,9 @@ func migrate(db *sql.DB) error {
 	}
 	ctx := context.Background()
 	return transact(db, writeJob{ctx: ctx, run: func(tx *sql.Tx) error {
-		_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS egress_totals(
+		_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS user_archives(
+            user_id INTEGER PRIMARY KEY REFERENCES users(id),deleted_at INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS egress_totals(
 			device_id TEXT PRIMARY KEY REFERENCES egress_devices(id),upload INTEGER NOT NULL,
 			download INTEGER NOT NULL,connections INTEGER NOT NULL,last_event_id INTEGER NOT NULL,since INTEGER NOT NULL);
 			CREATE INDEX IF NOT EXISTS egress_request_cursor ON egress_events(device_id,id) WHERE kind='request';

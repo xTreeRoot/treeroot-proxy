@@ -1,4 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { Button as AntButton, Input } from "antd";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
@@ -168,7 +175,7 @@ function Login({ enter }: { enter: (session: Session) => void }) {
         </div>
         <label className="field">
           <span>管理员账号</span>
-          <input
+          <Input
             autoComplete="username"
             required
             value={username}
@@ -177,8 +184,7 @@ function Login({ enter }: { enter: (session: Session) => void }) {
         </label>
         <label className="field">
           <span>密码</span>
-          <input
-            type="password"
+          <Input.Password
             autoComplete="current-password"
             required
             value={password}
@@ -211,6 +217,14 @@ function Workspace({
     [open, setOpen] = useState(false),
     [collapsed, setCollapsed] = useState(false),
     [proxyFilter, setProxyFilter] = useState("");
+  const [visited, setVisited] = useState<Page[]>([page]);
+  useEffect(
+    () =>
+      setVisited((previous) =>
+        previous.includes(page) ? previous : [...previous, page],
+      ),
+    [page],
+  );
   const [mobile, setMobile] = useState(
     () => window.matchMedia("(max-width: 767px)").matches,
   );
@@ -231,6 +245,12 @@ function Workspace({
     "/users",
     ["users", "proxy-dashboard", "activity"].includes(page),
   );
+  const archivedUsers = useRemote<User[]>(
+    ["users", "deleted"],
+    "/users?deleted=true",
+    ["proxy-dashboard", "activity"].includes(page),
+  );
+  const historyUsers = [...(users.data || []), ...(archivedUsers.data || [])];
   const rates = useRemote<Rates>(["rates", ""], "/rates", true, 5000);
   const client = useQueryClient();
   const { pending, run } = useTask();
@@ -411,16 +431,16 @@ function Workspace({
       </aside>
       <div className="workspace-shell" inert={mobile && open}>
         <header className="topbar">
-          <button
+          <AntButton
             ref={menu}
             className="icon-button mobile-menu"
-            type="button"
+            htmlType="button"
             aria-label="打开导航"
             aria-expanded={open}
             onClick={() => setOpen(true)}
           >
             <Menu size={21} />
-          </button>
+          </AntButton>
           <IconButton
             label={collapsed ? "展开侧栏" : "收起侧栏"}
             className="icon-button desktop-menu"
@@ -456,65 +476,101 @@ function Workspace({
         </header>
         <main ref={main} id="workspace" tabIndex={-1}>
           <section hidden={page !== "overview"} aria-label="运行概览">
-            <SystemPage active={page === "overview"} />
+            {(page === "overview" || visited.includes("overview")) && (
+              <>
+                <SystemPage active={page === "overview"} />
+              </>
+            )}
           </section>
           <section
             hidden={page !== "egress-dashboard"}
             aria-label="出口流量大盘"
           >
-            <EgressDashboard
-              active={page === "egress-dashboard"}
-              records={(scope) => {
-                setRecordScope({ ...scope, key: Date.now() });
-                navigate("egress-records");
-              }}
-            />
+            {(page === "egress-dashboard" ||
+              visited.includes("egress-dashboard")) && (
+              <>
+                <EgressDashboard
+                  active={page === "egress-dashboard"}
+                  records={(scope) => {
+                    setRecordScope({ ...scope, key: Date.now() });
+                    navigate("egress-records");
+                  }}
+                />
+              </>
+            )}
           </section>
           <section
             hidden={page !== "proxy-dashboard"}
             aria-label="代理流量大盘"
           >
-            <ProxyPage
-              active={page === "proxy-dashboard"}
-              users={users.data || []}
-              filter={proxyFilter}
-              setFilter={setProxyFilter}
-              manage={() => navigate("users")}
-            />
+            {(page === "proxy-dashboard" ||
+              visited.includes("proxy-dashboard")) && (
+              <>
+                <ProxyPage
+                  active={page === "proxy-dashboard"}
+                  users={historyUsers}
+                  filter={proxyFilter}
+                  setFilter={setProxyFilter}
+                  manage={() => navigate("users")}
+                />
+              </>
+            )}
           </section>
           <section hidden={page !== "users"} aria-label="用户与订阅">
-            <UsersPage
-              users={users.data || []}
-              loading={users.isPending}
-              error={users.error}
-              view={(id) => {
-                setProxyFilter(id);
-                navigate("proxy-dashboard");
-              }}
-            />
+            {(page === "users" || visited.includes("users")) && (
+              <>
+                <UsersPage
+                  active={page === "users"}
+                  users={users.data || []}
+                  loading={users.isPending}
+                  error={users.error}
+                  view={(id) => {
+                    setProxyFilter(id);
+                    navigate("proxy-dashboard");
+                  }}
+                />
+              </>
+            )}
           </section>
           <section hidden={page !== "activity"} aria-label="访问记录">
-            <RecordsPage
-              active={page === "activity"}
-              users={users.data || []}
-            />
+            {(page === "activity" || visited.includes("activity")) && (
+              <>
+                <RecordsPage
+                  active={page === "activity"}
+                  users={historyUsers}
+                />
+              </>
+            )}
           </section>
           <section hidden={page !== "egress"} aria-label="电脑出口">
-            <EgressPage active={page === "egress"} />
+            {(page === "egress" || visited.includes("egress")) && (
+              <>
+                <EgressPage active={page === "egress"} />
+              </>
+            )}
           </section>
           <section
             hidden={page !== "egress-records"}
             aria-label="电脑出口详细记录"
           >
-            <RecordsPage
-              active={page === "egress-records"}
-              users={[]}
-              egress
-              scope={recordScope}
-            />
+            {(page === "egress-records" ||
+              visited.includes("egress-records")) && (
+              <>
+                <RecordsPage
+                  active={page === "egress-records"}
+                  users={[]}
+                  egress
+                  scope={recordScope}
+                />
+              </>
+            )}
           </section>
           <section hidden={page !== "settings"} aria-label="管理设置">
-            <SettingsPage />
+            {(page === "settings" || visited.includes("settings")) && (
+              <>
+                <SettingsPage />
+              </>
+            )}
           </section>
         </main>
       </div>

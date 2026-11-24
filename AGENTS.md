@@ -35,7 +35,7 @@
 - **实际代理协议为 VMess + WebSocket + TLS，公网端口 443。**
 - `xray.service` 的旧 Description 写着 VLESS REALITY，这是历史名称，不能据此生成客户端配置。
 - Caddy 终止 TLS，把 WebSocket 转到 `127.0.0.1:10001`，把管理网站和订阅转到 `127.0.0.1:19991`。
-- Go 面板（`gopanel/`）提供管理、订阅、采集和每日备份，前端源码位于 `frontend/`，使用 React + TypeScript + Vite，构建后仍由 Go 提供静态资源。SQLite 写入经有界内存队列串行提交，连接明细在数据库分页，查询只选需要的列。
+- Go 面板（`gopanel/`）提供管理、订阅、采集和每日备份，前端源码位于 `frontend/`，使用 React + TypeScript + Vite + Ant Design，构建后仍由 Go 提供静态资源。SQLite 写入经有界内存队列串行提交，连接明细在数据库分页，查询只选需要的列。
 - Xray 的 Handler/Stats/Logger API 为 `127.0.0.1:10085`，Caddy admin 为 `127.0.0.1:2019`；均不可暴露到公网。
 - Go 面板进程在 `127.0.0.1:10002` 提供认证 SOCKS5 TCP/UDP 中继，按 Xray 用户路由执行共享带宽和总/日额度。旧 `treeroot-limits.service` 仅用于 Python 版本回退。
 - 限制配置存入新增 `user_limits`；`limit_usage` / `limit_daily` 是额度账本。首次切流前 `limits.activate` 从已有流量建立基线；切流后以中继实际授予的字节计额，不能再把已被 Xray 预读的缓冲字节重复加入。有限额度先持久化再转发，服务异常不回退直连；回退须同时恢复 Xray 路由，保留新增表和最新数据库。
@@ -101,6 +101,8 @@ python3 ops/manage.py status
 - 订阅节点地址使用域名 `proxy.treeroot.top`；Clash 与 Shadowrocket 各有订阅格式。
 - 重置订阅同时轮换链接 token 和代理 UUID，保留历史统计。
 - 默认用户“我的设备”和交付时另一真实用户“舅舅”必须保留；不得拿真实用户做破坏性测试。
+- 用户删除为可恢复归档：新增兼容表 `user_archives(user_id,deleted_at)`，`DELETE /api/users/{id}` 停用并归档；`GET /api/users?deleted=true` 查看，`POST /api/users/{id}/restore` 恢复后保持停用。原用户行、UUID、token、限额及全部历史不删除，已归档账号不可修改、重置或访问订阅。回退旧版时保留新表和最新 DB，旧版会把归档用户显示为普通停用用户。
+- 用户卡片桌面三列，1800px 起四列，1200px 以下两列、768px 以下一列，默认每页 12 位。操作控件使用 Ant Design，并在真实浏览器验证下拉、弹窗、表格、焦点和手机布局。
 - 普通 `/api/me` 未登录时返回 200 和 `authenticated:false`，需要登录的接口仍返回 401。
 - 旧链接兼容使用明确的 `/{token}/clash.yaml` 与 `/{token}/shadowrocket` 路由。**不要恢复 `/{token}/{kind}` 这种宽匹配，会截获 `/assets/app.js` 与 CSS。**
 - 验证 JS/CSS 返回 200 且 MIME 正确，不能只检查首页状态码。

@@ -22,6 +22,8 @@ export type Limits = {
   ready?: boolean;
 };
 export type User = {
+  deleted?: boolean;
+  deleted_at?: number | null;
   id: number;
   name: string;
   enabled: boolean | number;

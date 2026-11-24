@@ -1,6 +1,15 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { Input, InputNumber } from "antd";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, Link2, Plus, Settings2 } from "lucide-react";
+import {
+  Archive,
+  ExternalLink,
+  Link2,
+  Plus,
+  Settings2,
+  Trash2,
+  Undo2,
+} from "lucide-react";
 import { api, write } from "../api";
 import {
   Badge,
@@ -14,6 +23,7 @@ import {
   useCardPage,
   useTask,
   useUI,
+  useRemote,
 } from "../components";
 import { bytes, date, limitsBody, number } from "../lib";
 import type { Limits, User } from "../types";
@@ -42,7 +52,7 @@ export function UserIdentity({
 }
 export const UserStatus = ({ user }: { user: User }) => (
   <Badge tone={user.enabled ? "success" : "neutral"}>
-    {user.enabled ? "已启用" : "已禁用"}
+    {user.deleted ? "已删除" : user.enabled ? "已启用" : "已禁用"}
   </Badge>
 );
 function LimitStatus({ limits }: { limits?: Limits }) {
@@ -94,24 +104,36 @@ export function SubscriptionModal({
   );
 }
 export function UsersPage({
+  active,
   users,
   loading,
   error,
   view,
 }: {
+  active: boolean;
   users: User[];
   loading: boolean;
   error: Error | null;
   view: (id: string) => void;
 }) {
   const [filter, setFilter] = useState("");
+  const [trash, setTrash] = useState(false);
+  const archived = useRemote<User[]>(
+    ["users", "deleted"],
+    "/users?deleted=true",
+    active && trash,
+  );
+  const list = useRef<HTMLDivElement>(null);
+  const displayed = trash ? archived.data || [] : users;
+  const listLoading = trash ? archived.isPending : loading;
+  const listError = trash ? archived.error : error;
   const [edit, setEdit] = useState<User | "new" | null>(null);
   const [name, setName] = useState("");
   const [subscription, setSubscription] = useState<User | null>(null);
   const [limits, setLimits] = useState<User | null>(null);
   const paging = useCardPage(
-    users.filter((user) => !filter || String(user.id) === filter),
-    filter,
+    displayed.filter((user) => !filter || String(user.id) === filter),
+    `${trash}-${filter}`,
   );
   const client = useQueryClient();
   const { run, pending } = useTask();
@@ -141,22 +163,63 @@ export function UsersPage({
       notify("订阅已重置");
     });
   }
+  async function remove(user: User) {
+    if (
+      !(await confirm(
+        user.name,
+        "删除用户",
+        "停用代理并移至已删除用户，保留历史流量",
+      ))
+    )
+      return;
+    run("delete-" + user.id, async () => {
+      await write(`/users/${user.id}`, "DELETE");
+      if (filter === String(user.id)) setFilter("");
+      await refresh();
+      list.current?.focus({ preventScroll: true });
+      notify("用户已删除，可从已删除用户恢复");
+    });
+  }
+  function restore(user: User) {
+    run("restore-" + user.id, async () => {
+      await write(`/users/${user.id}/restore`, "POST");
+      if (filter === String(user.id)) setFilter("");
+      await refresh();
+      list.current?.focus({ preventScroll: true });
+      notify("用户已恢复，当前为停用状态");
+    });
+  }
   return (
-    <div className="page-stack">
+    <div className="page-stack" ref={list} tabIndex={-1}>
       <div className="toolbar">
-        <UserSelect users={users} value={filter} onChange={setFilter} />
-        <Button
-          variant="primary"
-          onClick={() => {
-            setName("");
-            setEdit("new");
-          }}
-        >
-          <Plus size={17} />
-          新增用户
-        </Button>
+        <UserSelect users={displayed} value={filter} onChange={setFilter} />
+        <div className="toolbar-group">
+          <Button
+            className={trash ? "selected" : ""}
+            aria-pressed={trash}
+            onClick={() => {
+              setTrash(!trash);
+              setFilter("");
+            }}
+          >
+            <Archive size={16} />
+            {trash ? "返回用户列表" : "已删除用户"}
+          </Button>
+          {!trash && (
+            <Button
+              variant="primary"
+              onClick={() => {
+                setName("");
+                setEdit("new");
+              }}
+            >
+              <Plus size={17} />
+              新增用户
+            </Button>
+          )}
+        </div>
       </div>
-      <Feedback loading={loading} error={error} retry={refresh} />
+      <Feedback loading={listLoading} error={listError} retry={refresh} />
       <div className="user-grid">
         {paging.items.map((user) => (
           <article key={user.id} className="user-card">
@@ -179,62 +242,102 @@ export function UsersPage({
               </div>
             </div>
             <LimitStatus limits={user.limits} />
-            <div className="user-primary-actions">
-              <Button variant="primary" onClick={() => setSubscription(user)}>
-                <Link2 size={15} />
-                订阅链接
-              </Button>
-              <Button onClick={() => view(String(user.id))}>
-                <ExternalLink size={15} />
-                查看统计
-              </Button>
-              <Button
-                aria-label={user.name + "的流量限制"}
-                onClick={() => setLimits(user)}
-              >
-                <Settings2 size={15} />
-                流量限制
-              </Button>
-            </div>
-            <div className="user-secondary-actions">
-              <Button
-                variant="text"
-                onClick={() => {
-                  setName(user.name);
-                  setEdit(user);
-                }}
-              >
-                重命名
-              </Button>
-              <Button
-                variant="text"
-                disabled={!!pending}
-                busy={pending === "toggle-" + user.id}
-                onClick={() =>
-                  run("toggle-" + user.id, async () => {
-                    await write(`/users/${user.id}`, "PATCH", {
-                      enabled: !user.enabled,
-                    });
-                    await refresh();
-                    notify(user.enabled ? "用户已禁用" : "用户已启用");
-                  })
-                }
-              >
-                {user.enabled ? "禁用" : "启用"}
-              </Button>
-              <Button
-                variant="text"
-                disabled={!!pending}
-                busy={pending === "reset-" + user.id}
-                onClick={() => reset(user)}
-              >
-                重置订阅
-              </Button>
-            </div>
+            {trash ? (
+              <>
+                <div className="user-time">
+                  删除时间：{date(user.deleted_at, true)}
+                </div>
+                <div className="user-primary-actions">
+                  <Button
+                    variant="primary"
+                    disabled={!!pending}
+                    busy={pending === "restore-" + user.id}
+                    onClick={() => restore(user)}
+                  >
+                    <Undo2 size={15} />
+                    恢复用户
+                  </Button>
+                  <Button onClick={() => view(String(user.id))}>
+                    <ExternalLink size={15} />
+                    查看统计
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="user-primary-actions">
+                  <Button
+                    variant="primary"
+                    onClick={() => setSubscription(user)}
+                  >
+                    <Link2 size={15} />
+                    订阅链接
+                  </Button>
+                  <Button onClick={() => view(String(user.id))}>
+                    <ExternalLink size={15} />
+                    查看统计
+                  </Button>
+                  <Button
+                    aria-label={user.name + "的流量限制"}
+                    onClick={() => setLimits(user)}
+                  >
+                    <Settings2 size={15} />
+                    流量限制
+                  </Button>
+                </div>
+                <div className="user-secondary-actions">
+                  <Button
+                    variant="text"
+                    onClick={() => {
+                      setName(user.name);
+                      setEdit(user);
+                    }}
+                  >
+                    重命名
+                  </Button>
+                  <Button
+                    variant="text"
+                    disabled={!!pending}
+                    busy={pending === "toggle-" + user.id}
+                    onClick={() =>
+                      run("toggle-" + user.id, async () => {
+                        await write(`/users/${user.id}`, "PATCH", {
+                          enabled: !user.enabled,
+                        });
+                        await refresh();
+                        notify(user.enabled ? "用户已禁用" : "用户已启用");
+                      })
+                    }
+                  >
+                    {user.enabled ? "禁用" : "启用"}
+                  </Button>
+                  <Button
+                    variant="text"
+                    disabled={!!pending}
+                    busy={pending === "reset-" + user.id}
+                    onClick={() => reset(user)}
+                  >
+                    重置订阅
+                  </Button>
+                  <Button
+                    variant="text"
+                    className="danger-text"
+                    disabled={!!pending}
+                    busy={pending === "delete-" + user.id}
+                    onClick={() => remove(user)}
+                  >
+                    <Trash2 size={13} />
+                    删除
+                  </Button>
+                </div>
+              </>
+            )}
           </article>
         ))}
       </div>
-      {!loading && !error && !paging.items.length && <Empty>暂无用户</Empty>}
+      {!listLoading && !listError && !paging.items.length && (
+        <Empty>{trash ? "暂无已删除用户" : "暂无用户"}</Empty>
+      )}
       <Pagination {...paging.props} />
       {edit && (
         <Modal
@@ -245,7 +348,7 @@ export function UsersPage({
           <form onSubmit={save}>
             <label className="field">
               <span>用户名称</span>
-              <input
+              <Input
                 autoFocus
                 required
                 maxLength={64}
@@ -359,19 +462,16 @@ function LimitsModal({ user, close }: { user: User; close: () => void }) {
                   }[key]
                 }
               </span>
-              <input
-                type="number"
+              <InputNumber<string>
+                stringMode
                 min="0"
-                step="any"
-                max={key === "speed_bps" ? 1000000 : 8388607}
+                step="0.1"
+                max={key === "speed_bps" ? "1000000" : "8388607"}
                 inputMode="decimal"
                 placeholder="不限"
                 value={values[key]}
-                onChange={(e) =>
-                  setValues((previous) => ({
-                    ...previous,
-                    [key]: e.target.value,
-                  }))
+                onChange={(value) =>
+                  setValues((previous) => ({ ...previous, [key]: value ?? "" }))
                 }
               />
             </label>

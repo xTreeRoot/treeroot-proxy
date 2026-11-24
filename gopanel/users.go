@@ -34,6 +34,8 @@ func (app *panel) routesUsers() {
 	app.route("POST /api/users", true, app.changeUser)
 	app.route("PATCH /api/users/{id}", true, app.changeUser)
 	app.route("POST /api/users/{id}/reset", true, app.changeUser)
+	app.route("DELETE /api/users/{id}", true, app.changeUser)
+	app.route("POST /api/users/{id}/restore", true, app.changeUser)
 	app.route("GET /api/users/{id}/limits", true, app.report(func(ctx context.Context, tx *sql.Tx, r *http.Request) (any, error) {
 		id, err := idParam(r)
 		if err != nil {
@@ -79,7 +81,7 @@ func publicLimits(item row) row {
 }
 
 func readLimits(ctx context.Context, db querier, id int64) (row, error) {
-	item, err := one(ctx, db, `SELECT `+limitsSelect+`, (SELECT CAST(value AS REAL) FROM state WHERE key='limits_heartbeat') heartbeat FROM users u`+limitsJoin+` WHERE u.id=?`, shanghaiDay(), id)
+	item, err := one(ctx, db, `SELECT `+limitsSelect+`, (SELECT CAST(value AS REAL) FROM state WHERE key='limits_heartbeat') heartbeat FROM users u`+limitsJoin+` WHERE u.id=? AND NOT EXISTS(SELECT 1 FROM user_archives a WHERE a.user_id=u.id)`, shanghaiDay(), id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, failure(404, "用户不存在")
 	}
@@ -128,14 +130,23 @@ func (app *panel) updateLimits(_ http.ResponseWriter, r *http.Request) (any, err
 	return result, err
 }
 
-func (app *panel) users(ctx context.Context, tx *sql.Tx, _ *http.Request) (any, error) {
-	rows, err := query(ctx, tx, `SELECT u.id,u.name,u.enabled,u.created,u.upload,u.download,u.token,COALESCE(s.domains,0) domains,COALESCE(s.connections,0) connections,s.last_used,`+limitsSelect+`
-		FROM users u`+limitsJoin+` LEFT JOIN (SELECT user_id,COUNT(*) domains,SUM(connections) connections,MAX(last_seen) last_used FROM domains GROUP BY user_id) s ON s.user_id=u.id ORDER BY u.id`, shanghaiDay())
+func (app *panel) users(ctx context.Context, tx *sql.Tx, r *http.Request) (any, error) {
+	deleted := false
+	if value := r.URL.Query().Get("deleted"); value != "" {
+		var err error
+		deleted, err = strconv.ParseBool(value)
+		if err != nil {
+			return nil, failure(422, "查询参数无效")
+		}
+	}
+	rows, err := query(ctx, tx, `SELECT u.id,u.name,u.enabled,u.created,u.upload,u.download,u.token,a.deleted_at,COALESCE(s.domains,0) domains,COALESCE(s.connections,0) connections,s.last_used,`+limitsSelect+`
+		FROM users u LEFT JOIN user_archives a ON a.user_id=u.id`+limitsJoin+` LEFT JOIN (SELECT user_id,COUNT(*) domains,SUM(connections) connections,MAX(last_seen) last_used FROM domains GROUP BY user_id) s ON s.user_id=u.id WHERE (a.user_id IS NOT NULL)=? ORDER BY u.id`, shanghaiDay(), deleted)
 	if err != nil {
 		return nil, err
 	}
 	for i, item := range rows {
 		user := app.publicUser(item)
+		user["deleted"], user["deleted_at"] = deleted, item["deleted_at"]
 		user["domains"], user["connections"], user["last_used"], user["limits"] = item["domains"], item["connections"], item["last_used"], publicLimits(item)
 		rows[i] = user
 	}
@@ -146,7 +157,9 @@ func (app *panel) changeUser(_ http.ResponseWriter, r *http.Request) (any, error
 	var id int64
 	var err error
 	create := r.PathValue("id") == ""
-	reset := !create && r.Method == "POST"
+	remove := r.Method == "DELETE"
+	restore := strings.HasSuffix(r.URL.Path, "/restore")
+	reset := !create && r.Method == "POST" && !restore
 	if !create {
 		id, err = idParam(r)
 		if err != nil {
@@ -157,7 +170,7 @@ func (app *panel) changeUser(_ http.ResponseWriter, r *http.Request) (any, error
 		Name    *string
 		Enabled *bool
 	}
-	if !reset {
+	if !reset && !remove && !restore {
 		if err := decode(r, &body); err != nil {
 			return nil, err
 		}
@@ -188,14 +201,32 @@ func (app *panel) changeUser(_ http.ResponseWriter, r *http.Request) (any, error
 				return err
 			}
 		} else {
-			before, err = one(ctx, tx, "SELECT enabled,email,client_uuid FROM users WHERE id=?", id)
+			before, err = one(ctx, tx, "SELECT enabled,email,client_uuid,EXISTS(SELECT 1 FROM user_archives a WHERE a.user_id=users.id) archived FROM users WHERE id=?", id)
 			if errors.Is(err, sql.ErrNoRows) {
 				return failure(404, "用户不存在")
 			}
 			if err != nil {
 				return err
 			}
-			if reset {
+			if before.number("archived") == 1 && !restore {
+				return failure(404, "用户已删除")
+			}
+			if restore && before.number("archived") == 0 {
+				return failure(404, "已删除用户不存在")
+			}
+			if remove {
+				action = "delete_user"
+				if _, err = tx.Exec("INSERT INTO user_archives(user_id,deleted_at) VALUES(?,?)", id, unixNow()); err != nil {
+					return err
+				}
+				_, err = tx.Exec("UPDATE users SET enabled=0 WHERE id=?", id)
+			} else if restore {
+				action = "restore_user"
+				if _, err = tx.Exec("DELETE FROM user_archives WHERE user_id=?", id); err != nil {
+					return err
+				}
+				_, err = tx.Exec("UPDATE users SET enabled=0 WHERE id=?", id)
+			} else if reset {
 				action = "reset_subscription"
 				_, err = tx.Exec("UPDATE users SET client_uuid=?,token=? WHERE id=?", uuid.NewString(), randomToken(), id)
 			} else {

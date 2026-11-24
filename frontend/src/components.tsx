@@ -7,6 +7,7 @@ import {
   useState,
   type ButtonHTMLAttributes,
   type ReactNode,
+  type Ref,
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -21,6 +22,22 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
+import {
+  Button as AntButton,
+  ConfigProvider,
+  Empty as AntEmpty,
+  Input,
+  Modal as AntModal,
+  Pagination as AntPagination,
+  Progress,
+  Select as AntSelect,
+  Table,
+  theme as antTheme,
+  type InputRef,
+  type TableColumnsType,
+} from "antd";
+import zhCN from "antd/locale/zh_CN";
+import type { TableRef } from "antd/es/table";
 import { api } from "./api";
 import { bytes, number, trendDate } from "./lib";
 import type { Domain, Point, User } from "./types";
@@ -46,10 +63,15 @@ type Prompt = {
   object: string;
   action: string;
   resolve: (value: boolean) => void;
+  detail?: string;
 };
 const UI = createContext<{
   notify: (message: string, error?: boolean) => void;
-  confirm: (object: string, action: string) => Promise<boolean>;
+  confirm: (
+    object: string,
+    action: string,
+    detail?: string,
+  ) => Promise<boolean>;
   theme: string;
 }>({ notify: () => {}, confirm: async () => false, theme: "light" });
 export const useUI = () => useContext(UI);
@@ -76,56 +98,96 @@ export function UIProvider({
     setPrompt(null);
   };
   return (
-    <UI.Provider
-      value={{
-        theme,
-        notify: (message, error = false) => setNotice({ message, error }),
-        confirm: (object, action) =>
-          new Promise((resolve) => setPrompt({ object, action, resolve })),
+    <ConfigProvider
+      locale={zhCN}
+      button={{ autoInsertSpace: false }}
+      theme={{
+        algorithm:
+          theme === "dark" ? antTheme.darkAlgorithm : antTheme.defaultAlgorithm,
+        token: {
+          colorPrimary: "#465fff",
+          colorInfo: "#465fff",
+          colorError: "#d92d20",
+          colorBgContainer: theme === "dark" ? "#1d2939" : "#ffffff",
+          colorBgElevated: theme === "dark" ? "#1d2939" : "#ffffff",
+          colorBgLayout: theme === "dark" ? "#101828" : "#f9fafb",
+          colorText: theme === "dark" ? "#f2f4f7" : "#1d2939",
+          colorTextSecondary: theme === "dark" ? "#b0b8c7" : "#667085",
+          colorBorder: theme === "dark" ? "#344054" : "#e4e7ec",
+          fontFamily:
+            '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+          fontSize: 13,
+          borderRadius: 9,
+          controlHeight: 42,
+        },
+        components: {
+          Table: {
+            headerBg: theme === "dark" ? "#253245" : "#f9fafb",
+            cellPaddingBlockMD: 16,
+          },
+          Segmented: { trackBg: theme === "dark" ? "#253245" : "#eef1f6" },
+        },
       }}
     >
-      {children}
-      {notice && (
-        <div
-          className={`toast ${notice.error ? "toast-error" : ""}`}
-          role={notice.error ? "alert" : "status"}
-        >
-          {notice.error ? <AlertCircle size={20} /> : <Check size={20} />}
-          <span>{notice.message}</span>
-          <IconButton label="关闭通知" onClick={() => setNotice(null)}>
-            <X size={16} />
-          </IconButton>
-        </div>
-      )}
-      {prompt && (
-        <Modal
-          label={`${prompt.action}「${prompt.object}」`}
-          onClose={() => answer(false)}
-        >
-          <div className="confirm-symbol">
-            <AlertCircle size={28} />
+      <UI.Provider
+        value={{
+          theme,
+          notify: (message, error = false) => setNotice({ message, error }),
+          confirm: (object, action, detail) =>
+            new Promise((resolve) =>
+              setPrompt({ object, action, detail, resolve }),
+            ),
+        }}
+      >
+        {children}
+        {notice && (
+          <div
+            className={`toast ${notice.error ? "toast-error" : ""}`}
+            role={notice.error ? "alert" : "status"}
+          >
+            {notice.error ? <AlertCircle size={20} /> : <Check size={20} />}
+            <span>{notice.message}</span>
+            <IconButton label="关闭通知" onClick={() => setNotice(null)}>
+              <X size={16} />
+            </IconButton>
           </div>
-          <dl className="confirm-fields">
-            <div>
-              <dt>操作</dt>
-              <dd>{prompt.action}</dd>
+        )}
+        {prompt && (
+          <Modal
+            label={`${prompt.action}「${prompt.object}」`}
+            onClose={() => answer(false)}
+          >
+            <div className="confirm-symbol">
+              <AlertCircle size={28} />
             </div>
-            <div>
-              <dt>对象</dt>
-              <dd>{prompt.object}</dd>
+            <dl className="confirm-fields">
+              <div>
+                <dt>操作</dt>
+                <dd>{prompt.action}</dd>
+              </div>
+              <div>
+                <dt>对象</dt>
+                <dd>{prompt.object}</dd>
+              </div>
+              {prompt.detail && (
+                <div>
+                  <dt>处理结果</dt>
+                  <dd>{prompt.detail}</dd>
+                </div>
+              )}
+            </dl>
+            <div className="modal-actions">
+              <Button autoFocus onClick={() => answer(false)}>
+                取消
+              </Button>
+              <Button variant="danger" onClick={() => answer(true)}>
+                {prompt.action}
+              </Button>
             </div>
-          </dl>
-          <div className="modal-actions">
-            <Button autoFocus onClick={() => answer(false)}>
-              取消
-            </Button>
-            <Button variant="danger" onClick={() => answer(true)}>
-              {prompt.action}
-            </Button>
-          </div>
-        </Modal>
-      )}
-    </UI.Provider>
+          </Modal>
+        )}
+      </UI.Provider>
+    </ConfigProvider>
   );
 }
 
@@ -155,39 +217,50 @@ export function Button({
   busy,
   className = "",
   disabled,
+  type = "button",
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
+}: Omit<ButtonHTMLAttributes<HTMLButtonElement>, "color"> & {
   variant?: "primary" | "subtle" | "danger" | "text";
   busy?: boolean;
 }) {
   return (
-    <button
-      type="button"
-      className={`button ${variant} ${className}`}
+    <AntButton
+      htmlType={type}
+      type={
+        variant === "primary" || variant === "danger"
+          ? "primary"
+          : variant === "text"
+            ? "text"
+            : "default"
+      }
+      danger={variant === "danger"}
+      className={`tree-button ${variant} ${className}`}
+      loading={busy}
       disabled={disabled || busy}
       aria-busy={busy || undefined}
       {...props}
     >
-      {busy && <LoaderCircle className="spin" size={16} aria-hidden="true" />}
       {children}
-    </button>
+    </AntButton>
   );
 }
 export function IconButton({
   label,
   children,
+  className = "",
+  type = "button",
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
+}: Omit<ButtonHTMLAttributes<HTMLButtonElement>, "color"> & { label: string }) {
   return (
-    <button
-      type="button"
-      className="icon-button"
+    <AntButton
+      htmlType={type}
+      className={`icon-button ${className}`}
       aria-label={label}
       title={label}
       {...props}
     >
       {children}
-    </button>
+    </AntButton>
   );
 }
 export function Badge({
@@ -205,7 +278,13 @@ export function Badge({
   );
 }
 export function Empty({ children = "暂无数据" }: { children?: ReactNode }) {
-  return <div className="empty">{children}</div>;
+  return (
+    <AntEmpty
+      className="empty"
+      image={AntEmpty.PRESENTED_IMAGE_SIMPLE}
+      description={children}
+    />
+  );
 }
 export function Feedback({
   loading,
@@ -262,7 +341,15 @@ export function Metric({
       </div>
       <div className="metric-value">{value}</div>
       {progress != null && (
-        <meter min="0" max="100" value={progress} aria-label={label} />
+        <Progress
+          className="resource-progress"
+          percent={progress}
+          showInfo={false}
+          size="small"
+          aria-label={label}
+          strokeColor="var(--brand)"
+          railColor="var(--track)"
+        />
       )}
       {note && <div className="metric-note">{note}</div>}
     </article>
@@ -288,6 +375,42 @@ export function Transfer({
     </span>
   );
 }
+export type SelectOption = { value: string; label: string; disabled?: boolean };
+export function SelectField({
+  label,
+  value,
+  onChange,
+  options,
+  disabled,
+  searchable = false,
+  id,
+  className = "",
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: SelectOption[];
+  disabled?: boolean;
+  searchable?: boolean;
+  id?: string;
+  className?: string;
+}) {
+  return (
+    <AntSelect
+      id={id}
+      aria-label={label}
+      className={`tree-select ${className}`}
+      value={value}
+      onChange={onChange}
+      options={options}
+      disabled={disabled}
+      showSearch={searchable ? { optionFilterProp: "label" } : false}
+      virtual={false}
+      listHeight={280}
+      notFoundContent={<Empty>暂无匹配项</Empty>}
+    />
+  );
+}
 export function UserSelect({
   users,
   value,
@@ -300,18 +423,19 @@ export function UserSelect({
   label?: string;
 }) {
   return (
-    <select
-      aria-label={label}
+    <SelectField
+      label={label}
       value={value}
-      onChange={(event) => onChange(event.target.value)}
-    >
-      <option value="">全部用户</option>
-      {users.map((user) => (
-        <option key={user.id} value={user.id}>
-          {user.name}
-        </option>
-      ))}
-    </select>
+      onChange={onChange}
+      searchable
+      options={[
+        { value: "", label: "全部用户" },
+        ...users.map((user) => ({
+          value: String(user.id),
+          label: user.name + (user.deleted ? "（已删除）" : ""),
+        })),
+      ]}
+    />
   );
 }
 export function Pagination({
@@ -331,46 +455,84 @@ export function Pagination({
   onSize: (value: number) => void;
   cards?: boolean;
 }) {
+  if (!total) return null;
   return (
     <nav className="pagination" aria-label="分页">
       <span className="pagination-summary">
         共 {number(total)} {cards ? "位用户" : "条"}
       </span>
       <div className="pagination-controls">
-        <select
-          aria-label="每页数量"
-          value={size}
-          onChange={(event) => onSize(Number(event.target.value))}
-        >
-          {(cards ? [6, 12, 24] : [25, 50, 100]).map((value) => (
-            <option key={value} value={value}>
-              {value} / 页
-            </option>
-          ))}
-        </select>
-        <IconButton
-          label="上一页"
-          disabled={page <= 1}
-          onClick={() => onPage(page - 1)}
-        >
-          <ChevronLeft size={18} />
-        </IconButton>
-        <span className="page-count" aria-live="polite">
-          {page} / {pages || 1}
-        </span>
-        <IconButton
-          label="下一页"
-          disabled={page >= pages}
-          onClick={() => onPage(page + 1)}
-        >
-          <ChevronRight size={18} />
-        </IconButton>
+        <SelectField
+          label="每页数量"
+          value={String(size)}
+          onChange={(value) => onSize(Number(value))}
+          options={(cards ? [6, 12, 24] : [25, 50, 100]).map((value) => ({
+            value: String(value),
+            label: `${value} / 页`,
+          }))}
+        />
+        <AntPagination
+          current={page}
+          pageSize={size}
+          total={total}
+          onChange={onPage}
+          showSizeChanger={false}
+          simple={{ readOnly: true }}
+          itemRender={(_, type, original) =>
+            type === "prev" || type === "next" ? (
+              <IconButton
+                label={type === "prev" ? "上一页" : "下一页"}
+                disabled={type === "prev" ? page <= 1 : page >= pages}
+              >
+                {type === "prev" ? (
+                  <ChevronLeft size={17} />
+                ) : (
+                  <ChevronRight size={17} />
+                )}
+              </IconButton>
+            ) : (
+              original
+            )
+          }
+        />
       </div>
     </nav>
   );
 }
+export function DataTable<T extends object>({
+  columns,
+  data,
+  rowKey,
+  loading,
+  empty = "暂无数据",
+  height,
+  tableRef,
+}: {
+  columns: TableColumnsType<T>;
+  data: T[];
+  rowKey: string;
+  loading?: boolean;
+  empty?: ReactNode;
+  height?: string | number;
+  tableRef?: Ref<TableRef>;
+}) {
+  return (
+    <Table<T>
+      ref={tableRef}
+      className="tree-table"
+      columns={columns}
+      dataSource={data}
+      rowKey={rowKey}
+      pagination={false}
+      size="middle"
+      loading={loading}
+      scroll={{ x: "max-content", ...(height ? { y: height } : {}) }}
+      locale={{ emptyText: <Empty>{empty}</Empty> }}
+    />
+  );
+}
 export function useCardPage<T>(items: T[], scope: string) {
-  const [paging, setPaging] = useState({ page: 1, size: 6, scope });
+  const [paging, setPaging] = useState({ page: 1, size: 12, scope });
   const pages = Math.max(1, Math.ceil(items.length / paging.size));
   const page = paging.scope === scope ? Math.min(paging.page, pages) : 1;
   return {
@@ -399,41 +561,45 @@ export function Modal({
   busy?: boolean;
   wide?: boolean;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
-  useLayoutEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
-    const dialog = ref.current!;
-    dialog.showModal();
-    document.body.classList.add("modal-open");
-    return () => {
-      dialog.close();
-      if (!document.querySelector("dialog[open]"))
-        document.body.classList.remove("modal-open");
-      previous?.focus({ preventScroll: true });
-    };
-  }, []);
+  const trigger = useRef(document.activeElement as HTMLElement | null);
+  useLayoutEffect(
+    () => () => {
+      const previous = trigger.current;
+      queueMicrotask(() => {
+        if (previous?.isConnected) previous.focus({ preventScroll: true });
+      });
+    },
+    [],
+  );
   return (
-    <dialog
-      ref={ref}
-      className={wide ? "modal modal-wide" : "modal"}
-      aria-label={label}
-      aria-busy={busy || undefined}
-      onCancel={(event) => {
-        event.preventDefault();
+    <AntModal
+      className="tree-modal"
+      open
+      centered
+      // Ant Design 6 forwards aria props to its outer wrapper, so name the actual dialog panel.
+      panelRef={(node) => {
+        const dialog = node?.closest('[role="dialog"]');
+        dialog?.setAttribute("aria-label", label);
+        dialog?.setAttribute("aria-busy", String(busy));
+      }}
+      title={null}
+      footer={null}
+      width={wide ? 900 : 480}
+      mask={{ closable: false }}
+      keyboard={!busy}
+      closable={{ disabled: busy, "aria-label": "关闭" }}
+      closeIcon={<X size={19} />}
+      onCancel={() => {
         if (!busy) onClose();
       }}
+      destroyOnHidden
     >
-      <div className="modal-top">
-        <IconButton label="关闭" disabled={busy} onClick={onClose}>
-          <X size={20} />
-        </IconButton>
-      </div>
       {children}
-    </dialog>
+    </AntModal>
   );
 }
 export function CopyField({ label, value }: { label: string; value: string }) {
-  const input = useRef<HTMLInputElement>(null);
+  const input = useRef<InputRef>(null);
   const { notify } = useUI();
   async function copy() {
     try {
@@ -449,7 +615,7 @@ export function CopyField({ label, value }: { label: string; value: string }) {
     <label className="field">
       <span>{label}</span>
       <div className="copy-field">
-        <input ref={input} readOnly value={value} />
+        <Input ref={input} readOnly value={value} />
         <Button onClick={copy} aria-label={`复制 ${label}`}>
           <Copy size={16} />
           复制

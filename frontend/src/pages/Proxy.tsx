@@ -15,6 +15,7 @@ import {
   TrafficChart,
   Transfer,
   UserSelect,
+  SelectField,
   useCardPage,
   useRemote,
 } from "../components";
@@ -162,50 +163,50 @@ export function ProxyPage({
             <div className="date-filters">
               <label>
                 年份
-                <select
-                  aria-label="趋势年份"
+                <SelectField
+                  label="趋势年份"
                   value={trend.year}
-                  onChange={(e) => change("year", e.target.value)}
-                >
-                  <option value="">最近 24 小时</option>
-                  {years.map((year) => (
-                    <option key={year} value={year}>
-                      {year} 年
-                    </option>
-                  ))}
-                </select>
+                  onChange={(value) => change("year", value)}
+                  options={[
+                    { value: "", label: "最近 24 小时" },
+                    ...years.map((year) => ({
+                      value: String(year),
+                      label: `${year} 年`,
+                    })),
+                  ]}
+                />
               </label>
               <label>
                 月份
-                <select
-                  aria-label="趋势月份"
+                <SelectField
+                  label="趋势月份"
                   value={trend.month}
                   disabled={!trend.year}
-                  onChange={(e) => change("month", e.target.value)}
-                >
-                  <option value="">全年</option>
-                  {Array.from({ length: 12 }, (_, i) => (
-                    <option key={i} value={i + 1}>
-                      {i + 1} 月
-                    </option>
-                  ))}
-                </select>
+                  onChange={(value) => change("month", value)}
+                  options={[
+                    { value: "", label: "全年" },
+                    ...Array.from({ length: 12 }, (_, i) => ({
+                      value: String(i + 1),
+                      label: `${i + 1} 月`,
+                    })),
+                  ]}
+                />
               </label>
               <label>
                 日期
-                <select
-                  aria-label="趋势日期"
+                <SelectField
+                  label="趋势日期"
                   value={trend.day}
                   disabled={!trend.month}
-                  onChange={(e) => change("day", e.target.value)}
-                >
-                  <option value="">全月</option>
-                  {Array.from({ length: days }, (_, i) => (
-                    <option key={i} value={i + 1}>
-                      {i + 1} 日
-                    </option>
-                  ))}
-                </select>
+                  onChange={(value) => change("day", value)}
+                  options={[
+                    { value: "", label: "全月" },
+                    ...Array.from({ length: days }, (_, i) => ({
+                      value: String(i + 1),
+                      label: `${i + 1} 日`,
+                    })),
+                  ]}
+                />
               </label>
             </div>
             <Button

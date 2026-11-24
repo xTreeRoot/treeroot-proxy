@@ -1,3 +1,4 @@
+import { Input } from "antd";
 import { useState, type FormEvent } from "react";
 import { LockKeyhole } from "lucide-react";
 import { write } from "../api";
@@ -25,8 +26,7 @@ export function SettingsPage() {
       <form onSubmit={submit}>
         <label className="field">
           <span>原密码</span>
-          <input
-            type="password"
+          <Input.Password
             required
             autoComplete="current-password"
             value={current}
@@ -35,8 +35,7 @@ export function SettingsPage() {
         </label>
         <label className="field">
           <span>新密码</span>
-          <input
-            type="password"
+          <Input.Password
             required
             autoComplete="new-password"
             value={password}
