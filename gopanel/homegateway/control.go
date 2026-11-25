@@ -114,6 +114,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		if pending == nil {
 			a.State.Sequence++
 			pending = &Sync{Boot: a.State.Boot, Sequence: a.State.Sequence, Version: Version, Applied: a.State.Applied, Error: strings.TrimSpace(a.State.Error + " " + a.State.ControlError), Status: a.Diagnostics(ctx), Capabilities: Capabilities{Routing: true, DHCP: true, Limits: false, WiFi: a.Config.AP != nil, APReboot: a.Config.AP != nil, Upgrade: false, IPv6: "blocked_on_lan", Mode: a.Config.Mode}, Devices: slices.Clone(devices), Events: slices.Clone(a.State.Events[:min(50, len(a.State.Events))]), Results: slices.Clone(a.State.Results)}
+			pending.Traffic = a.trafficSample()
 		}
 		var reply Reply
 		err := a.serverRequest(ctx, "/sync", pending, &reply)
@@ -140,6 +141,7 @@ func (a *Agent) Run(ctx context.Context) error {
 						}
 						a.State.Failures++
 						a.State.FailedConfig = digest
+						a.State.FailedRevision = reply.Config.Revision
 						a.State.RetryAfter = time.Now().Add(time.Duration(min(a.State.Failures, 5)) * time.Minute).Unix()
 						a.State.Error = e.Error()
 					}

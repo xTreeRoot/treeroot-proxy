@@ -47,14 +47,14 @@ import { HomePage } from "./pages/Home";
 
 export const navigation = [
   { id: "overview", label: "运行概览", icon: LayoutDashboard },
-  { id: "egress-dashboard", label: "出口流量大盘", icon: Globe2 },
   { id: "proxy-dashboard", label: "代理流量大盘", icon: BarChart3 },
-  { id: "users", label: "用户与订阅", icon: UsersIcon },
-  { id: "activity", label: "访问记录", icon: Activity },
-  { id: "egress", label: "电脑出口", icon: Monitor },
+  { id: "users", label: "vps用户", icon: UsersIcon },
+  { id: "activity", label: "代理流量记录", icon: Activity },
   { id: "home", label: "家庭网络", icon: Globe2 },
-  { id: "egress-records", label: "出口明细", icon: ListFilter },
   { id: "settings", label: "管理设置", icon: Settings },
+  { id: "egress-dashboard", label: "出口流量大盘", icon: Globe2 },
+  { id: "egress-records", label: "出口明细", icon: ListFilter },
+  { id: "egress", label: "电脑出口", icon: Monitor },
 ] as const;
 function currentPage(): Page {
   const hash = location.hash.slice(1);
@@ -247,12 +247,11 @@ function Workspace({
     "/users",
     ["users", "proxy-dashboard", "activity"].includes(page),
   );
-  const archivedUsers = useRemote<User[]>(
-    ["users", "deleted"],
-    "/users?deleted=true",
-    ["proxy-dashboard", "activity"].includes(page),
-  );
-  const historyUsers = [...(users.data || []), ...(archivedUsers.data || [])];
+  const visibleUsers = (users.data || []).filter((user) => !user.deleted);
+  useEffect(() => {
+    if (users.data && proxyFilter && !visibleUsers.some((user) => String(user.id) === proxyFilter))
+      setProxyFilter("");
+  }, [users.data, proxyFilter]);
   const rates = useRemote<Rates>(["rates", ""], "/rates", true, 5000);
   const client = useQueryClient();
   const { pending, run } = useTask();
@@ -513,7 +512,7 @@ function Workspace({
               <>
                 <ProxyPage
                   active={page === "proxy-dashboard"}
-                  users={historyUsers}
+                  users={visibleUsers}
                   filter={proxyFilter}
                   setFilter={setProxyFilter}
                   manage={() => navigate("users")}
@@ -521,12 +520,11 @@ function Workspace({
               </>
             )}
           </section>
-          <section hidden={page !== "users"} aria-label="用户与订阅">
+          <section hidden={page !== "users"} aria-label="vps用户">
             {(page === "users" || visited.includes("users")) && (
               <>
                 <UsersPage
-                  active={page === "users"}
-                  users={users.data || []}
+                  users={visibleUsers}
                   loading={users.isPending}
                   error={users.error}
                   view={(id) => {
@@ -537,12 +535,12 @@ function Workspace({
               </>
             )}
           </section>
-          <section hidden={page !== "activity"} aria-label="访问记录">
+          <section hidden={page !== "activity"} aria-label="代理流量记录">
             {(page === "activity" || visited.includes("activity")) && (
               <>
                 <RecordsPage
                   active={page === "activity"}
-                  users={historyUsers}
+                  users={visibleUsers}
                 />
               </>
             )}

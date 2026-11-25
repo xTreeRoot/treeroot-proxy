@@ -17,8 +17,10 @@ type Meter struct {
 	LastActive int64    `json:"last_active"`
 }
 type Ledger struct {
-	Boot   string           `json:"boot"`
-	Meters map[string]Meter `json:"meters"`
+	Boot              string           `json:"boot"`
+	Meters            map[string]Meter `json:"meters"`
+	TrafficGeneration string           `json:"traffic_generation,omitempty"`
+	TrafficStarted    int64            `json:"traffic_started,omitempty"`
 }
 
 func dayAt(t time.Time) string {
@@ -37,6 +39,10 @@ func (a *Agent) readLedger() error {
 	if a.ledger.Meters == nil {
 		a.ledger.Meters = map[string]Meter{}
 	}
+	if a.ledger.TrafficGeneration == "" {
+		a.ledger.TrafficGeneration = Nonce()
+		a.ledger.TrafficStarted = time.Now().Unix()
+	}
 	boot, _ := os.ReadFile("/proc/sys/kernel/random/boot_id")
 	if a.ledger.Boot != string(boot) {
 		for k, m := range a.ledger.Meters {
@@ -49,7 +55,19 @@ func (a *Agent) readLedger() error {
 }
 func (a *Agent) sample(ctx context.Context) error {
 	values := a.counters(ctx)
+	traffic, e := a.trafficCounters(ctx)
+	if e != nil {
+		return e
+	}
+	for key, v := range traffic {
+		values[key] = v
+	}
 	a.ledger.add(values, time.Now())
+	a.sampledAt = time.Now().UnixMilli()
+	a.sampledMono = time.Since(a.started).Milliseconds()
+	return a.persistLedger()
+}
+func (a *Agent) persistLedger() error {
 	data, e := json.Marshal(a.ledger)
 	if e != nil {
 		return e
@@ -85,6 +103,9 @@ func (l *Ledger) add(values map[string][2]int64, now time.Time) {
 }
 func (a *Agent) resetCounters() error {
 	for k, m := range a.ledger.Meters {
+		if len(k) > 4 && k[:4] == "wan:" {
+			continue
+		}
 		m.Last = [2]int64{}
 		a.ledger.Meters[k] = m
 	}

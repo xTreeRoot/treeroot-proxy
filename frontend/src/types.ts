@@ -23,6 +23,7 @@ export type Limits = {
   ready?: boolean;
 };
 export type User = {
+  home_gateway_id?: string | null;
   deleted?: boolean;
   deleted_at?: number | null;
   id: number;

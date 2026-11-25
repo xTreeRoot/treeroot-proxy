@@ -27,11 +27,13 @@ it("saves the selected device identity and a device-specific denial while showin
         data={revision:config.revision,state:"pending"};
       }else data=config;
     }
+    if(path.endsWith("/overview"))data={started:0,until:0,totals:[],series:[],destinations:[]};
     return new Response(JSON.stringify(data),{headers:{"Content-Type":"application/json"}});
   }));
   const client=new QueryClient({defaultOptions:{queries:{retry:false,refetchOnWindowFocus:false}}});
   const view=render(<QueryClientProvider client={client}><UIProvider theme="light"><HomePage active/></UIProvider></QueryClientProvider>);
   const user=userEvent.setup();
+  await user.click(await screen.findByRole("tab",{name:"家庭设备"}));
   const row=(await screen.findByText("设备 A")).closest("tr")!;
   await waitFor(()=>expect((within(row).getByRole("button",{name:"设置"}) as HTMLButtonElement).disabled).toBe(false));
   await user.click(within(row).getByRole("button",{name:"设置"}));
@@ -68,7 +70,8 @@ it("previews advanced YAML without saving and invalidates the preview after edit
   if(path==="/api/home")data=[{id:"advanced",name:"网关",online:true,paired:true,enabled:true,last_seen:1,version:"test",applied:1,revision:1,error:"",status:{},capabilities:{mode:"physical",wifi:false,limits:false,upgrade:false}}];
   if(path.endsWith("/config"))data=base;
   if(path.endsWith("/rules/preview")){requests.push({path,body:JSON.parse(String(options.body))});data={config:{...base,rules:[{id:"preview-rule",scope:"all",subject:"",target_type:"keyword",target:"treeroot.top",action:"direct",priority:100,enabled:true}]},changes:[{operation:"prepend",line:"DOMAIN-KEYWORD,treeroot.top,DIRECT"}]};}
-  return new Response(JSON.stringify(data),{headers:{"Content-Type":"application/json"}});
+  if(path.endsWith("/overview"))data={started:0,until:0,totals:[],series:[],destinations:[]};
+    return new Response(JSON.stringify(data),{headers:{"Content-Type":"application/json"}});
  }));
  const client=new QueryClient({defaultOptions:{queries:{retry:false,refetchOnWindowFocus:false}}});
  const view=render(<QueryClientProvider client={client}><UIProvider theme="light"><HomePage active/></UIProvider></QueryClientProvider>);
@@ -94,7 +97,8 @@ it("preserves the hidden 5G settings and requires confirmation before submitting
   if(path==="/api/home")data=[{id:"wifi",name:"网关",online:true,paired:true,enabled:true,last_seen:1,version:"test",applied:1,revision:1,error:"",status:{wifi:{online:true,unified:true,band2:{enabled:true,ssid:"fixture",secured:true,channel:0},band5:{enabled:true,ssid:"fixture",secured:true,channel:36},guest_supported:false}},capabilities:{mode:"isolated",wifi:true,limits:false,upgrade:false}}];
   if(path.endsWith("/config"))data={revision:1,default:"direct",default_node:"",devices:[],rules:[],nodes:[]};
   if(path.endsWith("/tasks")&&options.method==="POST"){submissions.push(JSON.parse(String(options.body)));data={state:"pending"}}
-  return new Response(JSON.stringify(data),{headers:{"Content-Type":"application/json"}});
+  if(path.endsWith("/overview"))data={started:0,until:0,totals:[],series:[],destinations:[]};
+    return new Response(JSON.stringify(data),{headers:{"Content-Type":"application/json"}});
  }));
  const client=new QueryClient({defaultOptions:{queries:{retry:false,refetchOnWindowFocus:false}}});
  const view=render(<QueryClientProvider client={client}><UIProvider theme="light"><HomePage active/></UIProvider></QueryClientProvider>);

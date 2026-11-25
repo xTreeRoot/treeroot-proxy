@@ -78,6 +78,16 @@ func TestHomeBrowserFixture(t *testing.T) {
 				return e
 			}
 		}
+		for i, route := range []string{"direct", "proxy"} {
+			if _, e = tx.Exec("INSERT INTO home_traffic_totals VALUES('browser-lab',?,?,?,?,?,?,?)", route, (i+1)*1048576, (i+1)*5242880, unixNow()-86400, unixNow(), 1024, 4096); e != nil {
+				return e
+			}
+			for h := range 24 {
+				if _, e = tx.Exec("INSERT INTO home_traffic_minutes VALUES('browser-lab',?,?,?,?)", route, unixNow()/3600*3600-int64(h)*3600, 1024*(h+1), 4096*(h+1)*(i+1)); e != nil {
+					return e
+				}
+			}
+		}
 		return nil
 	})
 	if e != nil {

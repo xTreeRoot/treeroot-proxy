@@ -71,6 +71,7 @@ func (a *Agent) health(ctx context.Context) map[string]any {
 		}
 	}
 	info["applied"] = a.State.Applied
+	info["failed_revision"] = a.State.FailedRevision
 	info["channel_error"] = a.State.ChannelError
 	info["last_sync"] = a.State.LastSync
 	info["events_pending"] = len(a.State.Events)
@@ -107,7 +108,7 @@ func (a *Agent) verifyConnectivity(ctx context.Context, c Config) error {
 		}
 		var last error
 		for _, target := range []string{"https://www.cloudflare.com/cdn-cgi/trace", "https://www.baidu.com/"} {
-			path := "/proxies/" + url.PathEscape("HG-"+node.ID) + "/delay?timeout=6000&url=" + url.QueryEscape(target)
+			path := "/proxies/" + url.PathEscape("HC-"+node.ID) + "/delay?timeout=6000&url=" + url.QueryEscape(target)
 			last = a.apiRequest(ctx, "GET", path, nil, &result)
 			if last == nil {
 				break

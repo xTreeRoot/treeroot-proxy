@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-const Version = "v2026.11.25.home.2"
+const Version = "v2026.11.25.home.3"
 
 type Device struct {
 	MAC          string   `json:"mac"`
@@ -47,6 +47,7 @@ type Rule struct {
 	Node       string `json:"node"`
 	Priority   int    `json:"priority"`
 	Enabled    bool   `json:"enabled"`
+	NoResolve  bool   `json:"no_resolve,omitempty"`
 }
 type Node struct {
 	ID    string         `json:"id"`
@@ -84,6 +85,7 @@ type Event struct {
 	Action   string `json:"action"`
 	Upload   int64  `json:"upload"`
 	Download int64  `json:"download"`
+	Outcome  string `json:"outcome,omitempty"`
 }
 type Task struct {
 	ID      string            `json:"id"`
@@ -109,6 +111,7 @@ type Sync struct {
 	Devices      []Device       `json:"devices"`
 	Events       []Event        `json:"events"`
 	Results      []Result       `json:"results"`
+	Traffic      *TrafficSample `json:"traffic,omitempty"`
 }
 type Reply struct {
 	Accepted    int64   `json:"accepted"`
@@ -207,8 +210,15 @@ func (c Config) Validate() error {
 			if _, e := netip.ParsePrefix(r.Target); e != nil {
 				return errors.New("网段无效")
 			}
+		case "geoip":
+			if !regexp.MustCompile(`^[A-Z]{2}$`).MatchString(r.Target) {
+				return errors.New("GEOIP 须使用两位大写国家代码")
+			}
 		default:
 			return errors.New("目标类型无效")
+		}
+		if r.NoResolve && r.TargetType != "cidr" && r.TargetType != "ip" && r.TargetType != "geoip" {
+			return errors.New("no-resolve 只适用于 IP、网段和 GEOIP")
 		}
 		if r.Protocol != "" && r.Protocol != "tcp" && r.Protocol != "udp" {
 			return errors.New("传输协议无效")
@@ -295,6 +305,12 @@ func (c Config) CompileRules(devices []Device) ([]string, error) {
 				parts = append(parts, fmt.Sprintf("(IP-CIDR,%s/%d)", ip, ip.BitLen()))
 			case "cidr":
 				parts = append(parts, "(IP-CIDR,"+r.Target+")")
+			case "geoip":
+				parts = append(parts, "(GEOIP,"+r.Target+")")
+			}
+			if r.NoResolve && len(parts) > 0 {
+				last := len(parts) - 1
+				parts[last] = strings.TrimSuffix(parts[last], ")") + ",no-resolve)"
 			}
 			if r.Port != "" {
 				parts = append(parts, "(DST-PORT,"+r.Port+")")
@@ -306,7 +322,15 @@ func (c Config) CompileRules(devices []Device) ([]string, error) {
 			if len(parts) == 0 {
 				result = append(result, "MATCH,"+target)
 			} else if len(parts) == 1 {
-				result = append(result, strings.Trim(parts[0], "()")+","+target)
+				part := strings.Trim(parts[0], "()")
+				if r.NoResolve {
+					part = strings.TrimSuffix(part, ",no-resolve")
+				}
+				line := part + "," + target
+				if r.NoResolve {
+					line += ",no-resolve"
+				}
+				result = append(result, line)
 			} else {
 				result = append(result, "AND,("+strings.Join(parts, ",")+"),"+target)
 			}

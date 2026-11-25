@@ -24,6 +24,7 @@ type RuleChange struct {
 type RulePreview struct {
 	Config  Config       `json:"config"`
 	Changes []RuleChange `json:"changes"`
+	Source  string       `json:"source,omitempty"`
 }
 
 // PreviewRules translates the supported Clash rule patch into the same validated
@@ -64,6 +65,10 @@ func PreviewRules(current Config, source, scope, subject string, nodes []Node) (
 		for i := range parts {
 			parts[i] = strings.TrimSpace(parts[i])
 		}
+		if len(parts) == 4 && strings.EqualFold(parts[3], "no-resolve") {
+			r.NoResolve = true
+			parts = parts[:3]
+		}
 		if len(parts) < 2 || len(parts) > 3 {
 			return r, errors.New("只支持 类型,目标,策略；MATCH 使用 MATCH,策略")
 		}
@@ -86,6 +91,8 @@ func PreviewRules(current Config, source, scope, subject string, nodes []Node) (
 				r.TargetType = "keyword"
 			case "IP-CIDR", "IP-CIDR6":
 				r.TargetType = "cidr"
+			case "GEOIP":
+				r.TargetType, r.Target = "geoip", strings.ToUpper(parts[1])
 			case "DST-PORT":
 				r.TargetType, r.Target, r.Port = "any", "", parts[1]
 			case "NETWORK":
@@ -121,7 +128,7 @@ func PreviewRules(current Config, source, scope, subject string, nodes []Node) (
 		return r, nil
 	}
 	key := func(r Rule) string {
-		return strings.Join([]string{r.Scope, r.Subject, r.TargetType, strings.ToLower(r.Target), r.Port, r.Protocol, r.Action, r.Node}, "\x00")
+		return strings.Join([]string{r.Scope, r.Subject, r.TargetType, strings.ToLower(r.Target), r.Port, r.Protocol, r.Action, r.Node, fmt.Sprint(r.NoResolve)}, "\x00")
 	}
 	parseList := func(name string, lines []string) ([]Rule, error) {
 		rules := []Rule{}
@@ -224,7 +231,7 @@ func PreviewRules(current Config, source, scope, subject string, nodes []Node) (
 }
 
 func ruleLine(r Rule, nodes []Node) string {
-	kind := map[string]string{"domain": "DOMAIN", "suffix": "DOMAIN-SUFFIX", "keyword": "DOMAIN-KEYWORD", "cidr": "IP-CIDR", "any": "MATCH", "ip": "IP"}[r.TargetType]
+	kind := map[string]string{"domain": "DOMAIN", "suffix": "DOMAIN-SUFFIX", "keyword": "DOMAIN-KEYWORD", "cidr": "IP-CIDR", "geoip": "GEOIP", "any": "MATCH", "ip": "IP"}[r.TargetType]
 	target := r.Target
 	if r.Port != "" {
 		kind, target = "DST-PORT", r.Port
@@ -236,5 +243,9 @@ func ruleLine(r Rule, nodes []Node) string {
 	if target == "" {
 		return kind + "," + policy
 	}
-	return kind + "," + target + "," + policy
+	line := kind + "," + target + "," + policy
+	if r.NoResolve {
+		line += ",no-resolve"
+	}
+	return line
 }

@@ -278,7 +278,7 @@ describe("React page interactions", () => {
   });
   it("keeps user filters on return, paginates cards, and saves exact limit units", async () => {
     mount("users");
-    const section = await screen.findByRole("region", { name: "用户与订阅" });
+    const section = await screen.findByRole("region", { name: "vps用户" });
     await within(section).findByText("测试用户 1", { selector: "strong" });
     await choose(section, "每页数量", "6 / 页");
     await userEvent.click(
@@ -289,7 +289,7 @@ describe("React page interactions", () => {
     ).toBeTruthy();
     await choose(section, "筛选用户", "测试用户 1");
     await clickNav("运行概览");
-    await clickNav("用户与订阅");
+    await clickNav("vps用户");
     expect(within(section).getAllByRole("article")).toHaveLength(1);
     expect(
       within(section).getByText("测试用户 1", { selector: "strong" }),
@@ -331,7 +331,7 @@ describe("React page interactions", () => {
   it("names the reset target, supports cancel and Escape, and escapes user content", async () => {
     users[0].name = "<img src=x onerror=alert(1)>";
     mount("users");
-    const section = await screen.findByRole("region", { name: "用户与订阅" });
+    const section = await screen.findByRole("region", { name: "vps用户" });
     await within(section).findByText(users[0].name, { selector: "strong" });
     const card = within(section)
       .getByText(users[0].name, { selector: "strong" })
@@ -360,7 +360,7 @@ describe("React page interactions", () => {
   });
   it("keeps record anchors across pages and resets them when changing filters or size", async () => {
     mount("activity");
-    const section = await screen.findByRole("region", { name: "访问记录" });
+    const section = await screen.findByRole("region", { name: "代理流量记录" });
     await waitFor(() =>
       expect(within(section).getAllByText("example.org")).toHaveLength(25),
     );
@@ -435,10 +435,10 @@ describe("React page interactions", () => {
       ).toBe(true),
     );
   });
-  it("confirms the delete target and restores a disabled user with history", async () => {
+  it("confirms the delete target and hides the archived account while preserving its history", async () => {
     users = users.slice(0, 2);
     mount("users");
-    const section = await screen.findByRole("region", { name: "用户与订阅" });
+    const section = await screen.findByRole("region", { name: "vps用户" });
     const name = await within(section).findByText("测试用户 1", {
       selector: "strong",
     });
@@ -470,34 +470,17 @@ describe("React page interactions", () => {
           item.path === "/api/users/1" && item.options.method === "DELETE",
       ),
     ).toBeTruthy();
-    await userEvent.click(
-      within(section).getByRole("button", { name: "已删除用户" }),
-    );
-    const archived = await within(section).findByText("测试用户 1", {
-      selector: "strong",
-    });
-    expect(
-      within(archived.closest("article")!).getByText("5.0 KB"),
-    ).toBeTruthy();
-    await userEvent.click(
-      within(archived.closest("article")!).getByRole("button", {
-        name: "恢复用户",
-      }),
-    );
-    await waitFor(() => expect(archivedUsers).toHaveLength(0));
-    await userEvent.click(
-      within(section).getByRole("button", { name: "返回用户列表" }),
-    );
-    const restored = await within(section).findByText("测试用户 1", {
-      selector: "strong",
-    });
-    expect(
-      within(restored.closest("article")!).getByText("已禁用"),
-    ).toBeTruthy();
-    expect(users.find((item) => item.id === 1)).toMatchObject({
+    expect(archivedUsers).toHaveLength(1);
+    expect(archivedUsers[0]).toMatchObject({
       ...original,
       enabled: 0,
-      deleted: false,
+      deleted: true,
     });
+    expect(within(section).queryByRole("button", { name: "已删除用户" })).toBeNull();
+    await clickNav("代理流量大盘");
+    const dashboard = screen.getByRole("region", { name: "代理流量大盘" });
+    await within(dashboard).findByText("测试用户 2", { selector: "strong" });
+    expect(within(dashboard).queryByText("测试用户 1", { selector: "strong" })).toBeNull();
+    expect(requests.some((item) => item.path.includes("deleted=true"))).toBe(false);
   });
 });

@@ -646,11 +646,13 @@ export function TrafficChart({
   granularity = "hour",
   daySelected = false,
   label,
+  seriesNames,
 }: {
   points: Point[];
   granularity?: string;
   daySelected?: boolean;
   label: string;
+  seriesNames?: [string,string];
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const { theme } = useUI();
@@ -713,7 +715,7 @@ export function TrafficChart({
       },
       series: [
         {
-          name: "下载",
+          name: seriesNames?.[0] || "下载",
           type: "line",
           smooth: 0.25,
           showSymbol: false,
@@ -722,7 +724,7 @@ export function TrafficChart({
           areaStyle: { opacity: 0.06 },
         },
         {
-          name: "上传",
+          name: seriesNames?.[1] || "上传",
           type: "line",
           smooth: 0.25,
           showSymbol: false,
@@ -740,7 +742,7 @@ export function TrafficChart({
       observer.disconnect();
       chart.dispose();
     };
-  }, [points, granularity, daySelected, theme]);
+  }, [points, granularity, daySelected, theme, seriesNames?.[0], seriesNames?.[1]]);
   return (
     <div ref={ref} className="traffic-chart" role="img" aria-label={label} />
   );

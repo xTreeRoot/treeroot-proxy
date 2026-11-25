@@ -81,3 +81,27 @@ func TestAdvancedRejectsMalformedAndUnsupportedInputAtomically(t *testing.T) {
 		})
 	}
 }
+
+func TestGeoIPNoResolveCompilesAndKeepsDistinctImport(t *testing.T) {
+	c := fixture()
+	p, e := PreviewRules(c, "prepend: ['GEOIP,CN,DIRECT,no-resolve', 'IP-CIDR,10.0.0.0/8,DIRECT,no-resolve']", "all", "", nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	rules, e := p.Config.CompileRules(nil)
+	if e != nil || rules[0] != "GEOIP,CN,DIRECT,no-resolve" || rules[1] != "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve" {
+		t.Fatal(rules, e)
+	}
+	scoped, e := PreviewRules(c, "prepend: ['GEOIP,CN,DIRECT,no-resolve']", "device", c.Devices[0].MAC, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	rules, e = scoped.Config.CompileRules([]Device{{MAC: c.Devices[0].MAC, IP: "192.168.77.101"}})
+	if e != nil || !strings.Contains(rules[0], "(GEOIP,CN,no-resolve)") {
+		t.Fatal(rules, e)
+	}
+	different, e := PreviewRules(p.Config, "prepend: ['GEOIP,CN,DIRECT']", "all", "", nil)
+	if e != nil || len(different.Changes) != 1 {
+		t.Fatal(different, e)
+	}
+}

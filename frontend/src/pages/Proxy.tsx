@@ -70,7 +70,10 @@ export function ProxyPage({
       ...previous,
       [key]: value,
       ...(key === "year"
-        ? { month: "", day: "" }
+        ? {
+            month: value === String(now.getFullYear()) ? String(now.getMonth() + 1) : "",
+            day: "",
+          }
         : key === "month"
           ? { day: "" }
           : {}),

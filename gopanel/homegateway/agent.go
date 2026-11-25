@@ -35,24 +35,25 @@ type AgentConfig struct {
 	ControlDNS string    `json:"control_dns,omitempty"`
 }
 type AgentState struct {
-	KernelBoot    string            `json:"kernel_boot"`
-	Boot          string            `json:"boot"`
-	Sequence      int64             `json:"sequence"`
-	Applied       int64             `json:"applied"`
-	Desired       Config            `json:"desired"`
-	Results       []Result          `json:"results"`
-	Completed     map[string]Result `json:"completed"`
-	Events        []Event           `json:"events"`
-	Devices       []Device          `json:"devices"`
-	Error         string            `json:"error"`
-	ControlError  string            `json:"control_error,omitempty"`
-	FailedConfig  string            `json:"failed_config,omitempty"`
-	RetryAfter    int64             `json:"retry_after,omitempty"`
-	Failures      int               `json:"failures,omitempty"`
-	ChannelError  string            `json:"channel_error,omitempty"`
-	LastSync      int64             `json:"last_sync,omitempty"`
-	DroppedEvents int64             `json:"dropped_events,omitempty"`
-	WiFi          *homeap.WiFi      `json:"wifi,omitempty"`
+	KernelBoot     string            `json:"kernel_boot"`
+	Boot           string            `json:"boot"`
+	Sequence       int64             `json:"sequence"`
+	Applied        int64             `json:"applied"`
+	Desired        Config            `json:"desired"`
+	Results        []Result          `json:"results"`
+	Completed      map[string]Result `json:"completed"`
+	Events         []Event           `json:"events"`
+	Devices        []Device          `json:"devices"`
+	Error          string            `json:"error"`
+	ControlError   string            `json:"control_error,omitempty"`
+	FailedConfig   string            `json:"failed_config,omitempty"`
+	FailedRevision int64             `json:"failed_revision,omitempty"`
+	RetryAfter     int64             `json:"retry_after,omitempty"`
+	Failures       int               `json:"failures,omitempty"`
+	ChannelError   string            `json:"channel_error,omitempty"`
+	LastSync       int64             `json:"last_sync,omitempty"`
+	DroppedEvents  int64             `json:"dropped_events,omitempty"`
+	WiFi           *homeap.WiFi      `json:"wifi,omitempty"`
 }
 type Agent struct {
 	ConfigPath    string
@@ -69,6 +70,9 @@ type Agent struct {
 	exitOK        int64
 	droppedEvents atomic.Int64
 	apChecked     time.Time
+	started       time.Time
+	sampledAt     int64
+	sampledMono   int64
 }
 
 func Nonce() string { var b [24]byte; rand.Read(b[:]); return hex.EncodeToString(b[:]) }
@@ -118,7 +122,7 @@ func ReadAgent(path string) (*Agent, error) {
 	if c.AP != nil && (c.AP.Address != "192.168.77.3" || c.AP.MAC != "24:5a:5f:93:a5:71" || c.AP.Password == "") {
 		return nil, errors.New("AP 配置与已核实硬件不符")
 	}
-	a := &Agent{ConfigPath: path, Config: c, client: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	a := &Agent{ConfigPath: path, Config: c, started: time.Now(), client: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	if c.ControlDNS != "" {
 		if _, _, e := net.SplitHostPort(c.ControlDNS); e != nil {
 			return nil, errors.New("控制面 DNS 地址无效")
@@ -239,6 +243,13 @@ func (a *Agent) apply(ctx context.Context, c Config, devices []Device) error {
 	if e != nil {
 		return e
 	}
+	for i, line := range rules {
+		if strings.HasSuffix(line, ",DIRECT,no-resolve") {
+			rules[i] = strings.TrimSuffix(line, ",DIRECT,no-resolve") + "," + directAdapter + ",no-resolve"
+		} else if strings.HasSuffix(line, ",DIRECT") {
+			rules[i] = strings.TrimSuffix(line, ",DIRECT") + "," + directAdapter
+		}
+	}
 	raw, _ := json.Marshal(a.base)
 	var cfg map[string]any
 	json.Unmarshal(raw, &cfg)
@@ -257,7 +268,7 @@ func (a *Agent) apply(ctx context.Context, c Config, devices []Device) error {
 	cfg["external-controller"] = "127.0.0.1:9090"
 	cfg["external-controller-tls"] = ""
 	cfg["external-controller-unix"] = ""
-	healthProxy := map[string]string{"direct": "DIRECT", "reject": "REJECT", "proxy": "HG-" + c.DefaultNode}[c.Default]
+	healthProxy := map[string]string{"direct": "DIRECT", "reject": "REJECT", "proxy": "HC-" + c.DefaultNode}[c.Default]
 	cfg["listeners"] = []any{map[string]any{"name": "home-health", "type": "http", "listen": "127.0.0.1", "port": 17895, "proxy": healthProxy}}
 	if a.secret == "" {
 		a.secret = Nonce()
@@ -265,7 +276,7 @@ func (a *Agent) apply(ctx context.Context, c Config, devices []Device) error {
 	cfg["secret"] = a.secret
 	cfg["sniffer"] = map[string]any{"enable": true, "force-dns-mapping": true, "parse-pure-ip": true, "sniff": map[string]any{"HTTP": map[string]any{"ports": []string{"80", "8080-8880"}}, "TLS": map[string]any{"ports": []int{443, 8443}}, "QUIC": map[string]any{"ports": []int{443, 8443}}}}
 	cfg["profile"] = map[string]any{"store-fake-ip": true}
-	proxies := []map[string]any{}
+	proxies := []map[string]any{{"name": directAdapter, "type": "direct", "routing-mark": directMark}}
 	for _, n := range c.Nodes {
 		if n.Proxy == nil {
 			return errors.New("代理节点缺少配置")
@@ -275,7 +286,15 @@ func (a *Agent) apply(ctx context.Context, c Config, devices []Device) error {
 			p[k] = v
 		}
 		p["name"] = "HG-" + n.ID
+		p["routing-mark"] = proxyMark
 		proxies = append(proxies, p)
+		health := map[string]any{}
+		for k, v := range p {
+			health[k] = v
+		}
+		health["name"] = "HC-" + n.ID
+		health["routing-mark"] = 0
+		proxies = append(proxies, health)
 	}
 	cfg["proxies"] = proxies
 	cfg["proxy-groups"] = []any{}
@@ -344,6 +363,7 @@ func (a *Agent) apply(ctx context.Context, c Config, devices []Device) error {
 	a.State.Applied = c.Revision
 	a.State.Error = ""
 	a.State.FailedConfig, a.State.RetryAfter, a.State.Failures = "", 0, 0
+	a.State.FailedRevision = 0
 	a.exitAt, a.exitIP, a.exitOK = time.Time{}, "", 0
 	a.boundDevices = append([]Device(nil), devices...)
 	if e = a.save(); e != nil {

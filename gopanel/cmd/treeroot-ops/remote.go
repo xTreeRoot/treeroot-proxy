@@ -250,7 +250,25 @@ func completeFingerprint(path string) (map[string]string, error) {
 	}
 	defer db.Close()
 	result := map[string]string{}
-	for _, table := range []string{"users", "admin", "sessions", "user_archives", "domains", "traffic", "egress_devices", "egress_totals", "limit_usage", "limit_daily", "user_limits", "counters", "state"} {
+	tables := []string{"users", "admin", "sessions", "user_archives", "domains", "traffic", "egress_devices", "egress_totals", "limit_usage", "limit_daily", "user_limits", "counters", "state"}
+	rows, e := db.Query("SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'home_*' ORDER BY name")
+	if e != nil {
+		return nil, e
+	}
+	for rows.Next() {
+		var name string
+		if e = rows.Scan(&name); e != nil {
+			rows.Close()
+			return nil, e
+		}
+		tables = append(tables, name)
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return nil, e
+	}
+	for _, table := range tables {
 		sum, e := tableDigest(db, "SELECT * FROM "+table+" ORDER BY rowid")
 		if e != nil {
 			return nil, e
@@ -346,8 +364,10 @@ func candidate(stage string) error {
 	if e != nil {
 		return e
 	}
-	if !reflect.DeepEqual(before, after) {
-		return errors.New("candidate changed existing identities, sessions, statistics, or ledgers")
+	for table, sum := range before {
+		if sum != after[table] {
+			return errors.New("candidate changed existing identities, sessions, statistics, or ledgers")
+		}
 	}
 	return checkDB(path)
 }

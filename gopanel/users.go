@@ -21,6 +21,61 @@ import (
 const maxSafeInt = 1<<53 - 1
 const limitPrefix = "treeroot-limit-"
 
+// User creation and Xray registration are shared by ordinary users and the
+// dedicated identity belonging to each home gateway.
+func insertProxyUser(ctx context.Context, tx *sql.Tx, name string) (row, error) {
+	result, e := tx.Exec("INSERT INTO users(name,client_uuid,email,token,created) VALUES(?,?,?,?,?)", name, uuid.NewString(), "u-"+randomHex(16)+"@treeroot.local", randomToken(), unixNow())
+	if e != nil {
+		return nil, e
+	}
+	id, e := result.LastInsertId()
+	if e != nil {
+		return nil, e
+	}
+	return one(ctx, tx, "SELECT id,name,enabled,email,client_uuid,token,created,upload,download FROM users WHERE id=?", id)
+}
+
+type proxyUserChange struct {
+	original       []byte
+	before, after  row
+	removed, added bool
+}
+
+func (app *panel) registerProxyUser(ctx context.Context, tx *sql.Tx, after row, change *proxyUserChange) error {
+	change.after = after
+	var e error
+	change.original, e = os.ReadFile(app.config.XrayConfig)
+	if e != nil {
+		return e
+	}
+	users, e := query(ctx, tx, "SELECT id,email,client_uuid,enabled FROM users ORDER BY id")
+	if e != nil {
+		return e
+	}
+	if e = app.applyXray(change.original, users, nil, after, &change.removed, &change.added); e != nil {
+		logError("apply gateway proxy user", e)
+		return failure(503, "代理服务更新失败，改动已回滚")
+	}
+	return nil
+}
+func (app *panel) rollbackProxyUser(change *proxyUserChange) {
+	if change.original == nil {
+		return
+	}
+	if change.added {
+		_, e := app.xray("rmu", "-tag=websocket-in", change.after.text("email"))
+		logError("revert Xray addition", e)
+	}
+	if change.removed {
+		logError("restore Xray user", app.addXrayUser(change.original, change.before))
+	}
+	var cfg row
+	if json.Unmarshal(change.original, &cfg) == nil {
+		logError("restore Xray routing", app.syncRouting(cfg))
+	}
+	logError("restore Xray config", replaceConfig(app.config.XrayConfig, change.original))
+}
+
 func idParam(r *http.Request) (int64, error) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -139,7 +194,7 @@ func (app *panel) users(ctx context.Context, tx *sql.Tx, r *http.Request) (any, 
 			return nil, failure(422, "查询参数无效")
 		}
 	}
-	rows, err := query(ctx, tx, `SELECT u.id,u.name,u.enabled,u.created,u.upload,u.download,u.token,a.deleted_at,COALESCE(s.domains,0) domains,COALESCE(s.connections,0) connections,s.last_used,`+limitsSelect+`
+	rows, err := query(ctx, tx, `SELECT u.id,u.name,u.enabled,u.created,u.upload,u.download,u.token,(SELECT gateway_id FROM home_proxy_users WHERE user_id=u.id) home_gateway_id,a.deleted_at,COALESCE(s.domains,0) domains,COALESCE(s.connections,0) connections,s.last_used,`+limitsSelect+`
 		FROM users u LEFT JOIN user_archives a ON a.user_id=u.id`+limitsJoin+` LEFT JOIN (SELECT user_id,COUNT(*) domains,SUM(connections) connections,MAX(last_seen) last_used FROM domains GROUP BY user_id) s ON s.user_id=u.id WHERE (a.user_id IS NOT NULL)=? ORDER BY u.id`, shanghaiDay(), deleted)
 	if err != nil {
 		return nil, err
@@ -147,6 +202,7 @@ func (app *panel) users(ctx context.Context, tx *sql.Tx, r *http.Request) (any, 
 	for i, item := range rows {
 		user := app.publicUser(item)
 		user["deleted"], user["deleted_at"] = deleted, item["deleted_at"]
+		user["home_gateway_id"] = item["home_gateway_id"]
 		user["domains"], user["connections"], user["last_used"], user["limits"] = item["domains"], item["connections"], item["last_used"], publicLimits(item)
 		rows[i] = user
 	}
@@ -192,15 +248,21 @@ func (app *panel) changeUser(_ http.ResponseWriter, r *http.Request) (any, error
 		action := "update_user"
 		if create {
 			action = "create_user"
-			result, err := tx.Exec("INSERT INTO users(name,client_uuid,email,token,created) VALUES(?,?,?,?,?)", *body.Name, uuid.NewString(), "u-"+randomHex(16)+"@treeroot.local", randomToken(), unixNow())
-			if err != nil {
-				return err
+			created, e := insertProxyUser(ctx, tx, *body.Name)
+			if e != nil {
+				return e
 			}
-			id, err = result.LastInsertId()
-			if err != nil {
-				return err
-			}
+			id = created.number("id")
 		} else {
+			if remove || reset || body.Enabled != nil && !*body.Enabled {
+				owned, e := one(ctx, tx, "SELECT gateway_id FROM home_proxy_users WHERE user_id=?", id)
+				if e == nil && owned.text("gateway_id") != "" {
+					return failure(409, "这是家庭网关的专属统计账号，不能删除、停用或重置")
+				}
+				if e != nil && !errors.Is(e, sql.ErrNoRows) {
+					return e
+				}
+			}
 			before, err = one(ctx, tx, "SELECT enabled,email,client_uuid,EXISTS(SELECT 1 FROM user_archives a WHERE a.user_id=users.id) archived FROM users WHERE id=?", id)
 			if errors.Is(err, sql.ErrNoRows) {
 				return failure(404, "用户不存在")

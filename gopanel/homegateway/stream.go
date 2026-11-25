@@ -20,11 +20,13 @@ var denyLogPattern = regexp.MustCompile(`^\[(TCP|UDP)\] dial (REJECT|DIRECT|HG-[
 func ParseLog(payload string) (Event, bool) {
 	var e Event
 	m := logPattern.FindStringSubmatch(payload)
+	failedConnection := false
 	if m == nil {
 		failed := denyLogPattern.FindStringSubmatch(payload)
 		if failed == nil {
 			return e, false
 		}
+		failedConnection = true
 		m = []string{failed[0], failed[1], failed[4], failed[5], "match " + failed[3] + " using " + failed[2]}
 	}
 	source, _, err := net.SplitHostPort(m[2])
@@ -37,9 +39,13 @@ func ParseLog(payload string) (Event, bool) {
 	}
 	e = Event{ID: Nonce(), TS: time.Now().Unix(), Source: source, Target: target, Protocol: strings.ToLower(m[1]), Rule: m[4]}
 	e.Port, _ = strconv.Atoi(port)
+	if failedConnection {
+		e.Outcome = "failed"
+	}
 	switch {
 	case strings.Contains(m[4], "REJECT"):
 		e.Action = "reject"
+		e.Outcome = "blocked"
 	case strings.Contains(m[4], "DIRECT"):
 		e.Action = "direct"
 	case strings.Contains(m[4], "HG-"):

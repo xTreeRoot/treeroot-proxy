@@ -2,13 +2,11 @@ import { Input, InputNumber } from "antd";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  Archive,
   ExternalLink,
   Link2,
   Plus,
   Settings2,
   Trash2,
-  Undo2,
 } from "lucide-react";
 import { api, write } from "../api";
 import {
@@ -23,7 +21,6 @@ import {
   useCardPage,
   useTask,
   useUI,
-  useRemote,
 } from "../components";
 import { bytes, date, limitsBody, number } from "../lib";
 import type { Limits, User } from "../types";
@@ -40,6 +37,7 @@ export function UserIdentity({
       <span className="avatar">{user.name.slice(0, 1)}</span>
       <div>
         <strong>{user.name}</strong>
+        {user.home_gateway_id&&<span className="user-time">家庭网关专属统计</span>}
         {created && (
           <span className="user-time">创建：{date(user.created, true)}</span>
         )}
@@ -104,36 +102,28 @@ export function SubscriptionModal({
   );
 }
 export function UsersPage({
-  active,
   users,
   loading,
   error,
   view,
 }: {
-  active: boolean;
   users: User[];
   loading: boolean;
   error: Error | null;
   view: (id: string) => void;
 }) {
   const [filter, setFilter] = useState("");
-  const [trash, setTrash] = useState(false);
-  const archived = useRemote<User[]>(
-    ["users", "deleted"],
-    "/users?deleted=true",
-    active && trash,
-  );
   const list = useRef<HTMLDivElement>(null);
-  const displayed = trash ? archived.data || [] : users;
-  const listLoading = trash ? archived.isPending : loading;
-  const listError = trash ? archived.error : error;
+  const displayed = users.filter((user) => !user.deleted);
+  const listLoading = loading;
+  const listError = error;
   const [edit, setEdit] = useState<User | "new" | null>(null);
   const [name, setName] = useState("");
   const [subscription, setSubscription] = useState<User | null>(null);
   const [limits, setLimits] = useState<User | null>(null);
   const paging = useCardPage(
     displayed.filter((user) => !filter || String(user.id) === filter),
-    `${trash}-${filter}`,
+    filter,
   );
   const client = useQueryClient();
   const { run, pending } = useTask();
@@ -168,7 +158,7 @@ export function UsersPage({
       !(await confirm(
         user.name,
         "删除用户",
-        "停用代理并移至已删除用户，保留历史流量",
+        "停用代理并隐藏账号，保留历史流量",
       ))
     )
       return;
@@ -177,16 +167,7 @@ export function UsersPage({
       if (filter === String(user.id)) setFilter("");
       await refresh();
       list.current?.focus({ preventScroll: true });
-      notify("用户已删除，可从已删除用户恢复");
-    });
-  }
-  function restore(user: User) {
-    run("restore-" + user.id, async () => {
-      await write(`/users/${user.id}/restore`, "POST");
-      if (filter === String(user.id)) setFilter("");
-      await refresh();
-      list.current?.focus({ preventScroll: true });
-      notify("用户已恢复，当前为停用状态");
+      notify("用户已删除");
     });
   }
   return (
@@ -194,18 +175,6 @@ export function UsersPage({
       <div className="toolbar">
         <UserSelect users={displayed} value={filter} onChange={setFilter} />
         <div className="toolbar-group">
-          <Button
-            className={trash ? "selected" : ""}
-            aria-pressed={trash}
-            onClick={() => {
-              setTrash(!trash);
-              setFilter("");
-            }}
-          >
-            <Archive size={16} />
-            {trash ? "返回用户列表" : "已删除用户"}
-          </Button>
-          {!trash && (
             <Button
               variant="primary"
               onClick={() => {
@@ -216,7 +185,6 @@ export function UsersPage({
               <Plus size={17} />
               新增用户
             </Button>
-          )}
         </div>
       </div>
       <Feedback loading={listLoading} error={listError} retry={refresh} />
@@ -242,32 +210,11 @@ export function UsersPage({
               </div>
             </div>
             <LimitStatus limits={user.limits} />
-            {trash ? (
-              <>
-                <div className="user-time">
-                  删除时间：{date(user.deleted_at, true)}
-                </div>
-                <div className="user-primary-actions">
-                  <Button
-                    variant="primary"
-                    disabled={!!pending}
-                    busy={pending === "restore-" + user.id}
-                    onClick={() => restore(user)}
-                  >
-                    <Undo2 size={15} />
-                    恢复用户
-                  </Button>
-                  <Button onClick={() => view(String(user.id))}>
-                    <ExternalLink size={15} />
-                    查看统计
-                  </Button>
-                </div>
-              </>
-            ) : (
               <>
                 <div className="user-primary-actions">
                   <Button
                     variant="primary"
+                    disabled={!!user.home_gateway_id}
                     onClick={() => setSubscription(user)}
                   >
                     <Link2 size={15} />
@@ -297,7 +244,7 @@ export function UsersPage({
                   </Button>
                   <Button
                     variant="text"
-                    disabled={!!pending}
+                    disabled={!!pending||!!user.home_gateway_id}
                     busy={pending === "toggle-" + user.id}
                     onClick={() =>
                       run("toggle-" + user.id, async () => {
@@ -313,7 +260,7 @@ export function UsersPage({
                   </Button>
                   <Button
                     variant="text"
-                    disabled={!!pending}
+                    disabled={!!pending||!!user.home_gateway_id}
                     busy={pending === "reset-" + user.id}
                     onClick={() => reset(user)}
                   >
@@ -322,7 +269,7 @@ export function UsersPage({
                   <Button
                     variant="text"
                     className="danger-text"
-                    disabled={!!pending}
+                    disabled={!!pending||!!user.home_gateway_id}
                     busy={pending === "delete-" + user.id}
                     onClick={() => remove(user)}
                   >
@@ -331,12 +278,11 @@ export function UsersPage({
                   </Button>
                 </div>
               </>
-            )}
           </article>
         ))}
       </div>
       {!listLoading && !listError && !paging.items.length && (
-        <Empty>{trash ? "暂无已删除用户" : "暂无用户"}</Empty>
+        <Empty>暂无用户</Empty>
       )}
       <Pagination {...paging.props} />
       {edit && (

@@ -28,7 +28,7 @@ CREATE INDEX IF NOT EXISTS home_events_time ON home_events(gateway_id,ts DESC);
 CREATE TABLE IF NOT EXISTS home_tasks(id TEXT PRIMARY KEY,gateway_id TEXT NOT NULL REFERENCES home_gateways(id),kind TEXT NOT NULL,created INTEGER NOT NULL,expires INTEGER NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '',finished INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS home_tasks_pending ON home_tasks(gateway_id,state,expires);
 CREATE TABLE IF NOT EXISTS home_audit(id INTEGER PRIMARY KEY,gateway_id TEXT NOT NULL,ts INTEGER NOT NULL,action TEXT NOT NULL,detail TEXT NOT NULL);
-`
+` + homeTrafficSchema + homeProxySchema
 
 func (app *panel) routesHome() {
 	app.route("GET /api/home", true, app.report(app.homeList))
@@ -38,6 +38,18 @@ func (app *panel) routesHome() {
 	}))
 	app.route("POST /api/home/{id}/pair-code", true, app.homePairCode)
 	app.route("POST /api/home/{id}/revoke", true, app.homeRevoke)
+	app.route("POST /api/home/{id}/proxy-user", true, app.homeEnsureProxy)
+	app.route("GET /api/home/{id}/nodes", true, app.report(func(ctx context.Context, tx *sql.Tx, r *http.Request) (any, error) {
+		nodes, e := gatewayNodes(ctx, tx, r.PathValue("id"))
+		if e != nil {
+			return nil, e
+		}
+		out := []row{}
+		for _, n := range nodes {
+			out = append(out, row{"id": strings.TrimPrefix(n.ID, "user-"), "name": n.Name})
+		}
+		return out, nil
+	}))
 	app.route("POST /api/home/{id}/pair", false, app.homePair)
 	app.route("POST /api/home/{id}/sync", false, app.homeSync)
 	app.route("GET /api/home/{id}/config", true, app.report(app.homeGetConfig))
@@ -45,6 +57,7 @@ func (app *panel) routesHome() {
 	app.route("POST /api/home/{id}/rules/preview", true, app.report(app.homeRulesPreview))
 	app.route("GET /api/home/{id}/devices", true, app.report(app.homeDevices))
 	app.route("GET /api/home/{id}/events", true, app.report(app.homeEvents))
+	app.route("GET /api/home/{id}/overview", true, app.report(app.homeOverview))
 	app.route("GET /api/home/{id}/tasks", true, app.report(func(ctx context.Context, tx *sql.Tx, r *http.Request) (any, error) {
 		return query(ctx, tx, "SELECT id,kind,created,expires,state,detail,finished FROM home_tasks WHERE gateway_id=? ORDER BY created DESC,id DESC LIMIT 100", r.PathValue("id"))
 	}))
@@ -77,6 +90,12 @@ func (app *panel) homeList(ctx context.Context, tx *sql.Tx, _ *http.Request) (an
 		v["enabled"] = v.number("enabled") == 1
 		v["status"] = json.RawMessage(v.text("status"))
 		v["capabilities"] = json.RawMessage(v.text("capabilities"))
+		v["proxy_user_id"], v["proxy_user_name"] = nil, nil
+		if u, e := gatewayProxyUser(ctx, tx, v.text("id")); e == nil {
+			v["proxy_user_id"], v["proxy_user_name"] = u["id"], u["name"]
+		} else if !errors.Is(e, sql.ErrNoRows) {
+			return nil, e
+		}
 	}
 	return rows, nil
 }
@@ -89,9 +108,8 @@ func (app *panel) homeCreate(_ http.ResponseWriter, r *http.Request) (any, error
 		return nil, failure(422, "请填写网关名称")
 	}
 	id := randomHex(16)
-	c := hg.Config{Revision: 1, Default: "direct", Devices: []hg.DevicePolicy{}, Rules: []hg.Rule{}, Nodes: []hg.Node{}}
-	raw, _ := json.Marshal(c)
-	e := app.write(r.Context(), func(tx *sql.Tx) error {
+	var change proxyUserChange
+	e := app.submit(writeJob{ctx: r.Context(), run: func(tx *sql.Tx) error {
 		v, e := one(r.Context(), tx, "SELECT COUNT(*) n FROM home_gateways")
 		if e != nil {
 			return e
@@ -102,11 +120,18 @@ func (app *panel) homeCreate(_ http.ResponseWriter, r *http.Request) (any, error
 		if _, e = tx.Exec("INSERT INTO home_gateways(id,name,created) VALUES(?,?,?)", id, body.Name, unixNow()); e != nil {
 			return e
 		}
+		user, e := app.addGatewayProxy(r.Context(), tx, id, body.Name, &change)
+		if e != nil {
+			return e
+		}
+		node := hg.Node{ID: "user-" + strconv.FormatInt(user.number("id"), 10), Name: user.text("name")}
+		c := hg.Config{Revision: 1, Default: "proxy", DefaultNode: node.ID, Devices: []hg.DevicePolicy{}, Rules: []hg.Rule{}, Nodes: []hg.Node{node}}
+		raw, _ := json.Marshal(c)
 		if _, e = tx.Exec("INSERT INTO home_configs VALUES(?,?,?,?)", id, 1, string(raw), unixNow()); e != nil {
 			return e
 		}
 		return homeAudit(tx, id, "create", body.Name)
-	})
+	}, rollback: func() { app.rollbackProxyUser(&change) }})
 	return row{"id": id}, e
 }
 func (app *panel) homePairCode(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -238,6 +263,16 @@ func (app *panel) saveHomeConfig(ctx context.Context, tx *sql.Tx, id string, c h
 	if e = c.Validate(); e != nil {
 		return failure(422, e.Error())
 	}
+	if account, e := gatewayProxyUser(ctx, tx, id); e == nil {
+		want := "user-" + strconv.FormatInt(account.number("id"), 10)
+		for _, n := range c.Nodes {
+			if n.ID != want {
+				return failure(422, "家庭流量须使用此网关的专属统计账号")
+			}
+		}
+	} else if !errors.Is(e, sql.ErrNoRows) {
+		return e
+	}
 	if e = app.homeNodes(ctx, tx, &c, false); e != nil {
 		return e
 	}
@@ -265,6 +300,7 @@ func (app *panel) homeRulesPreview(ctx context.Context, tx *sql.Tx, r *http.Requ
 		Source   string `json:"source"`
 		Scope    string `json:"scope"`
 		Subject  string `json:"subject"`
+		Template string `json:"template"`
 	}
 	if e := decode(r, &body); e != nil {
 		return nil, e
@@ -280,18 +316,47 @@ func (app *panel) homeRulesPreview(ctx context.Context, tx *sql.Tx, r *http.Requ
 	if e != nil {
 		return nil, e
 	}
-	users, e := query(ctx, tx, `SELECT u.id,u.name FROM users u LEFT JOIN user_archives a ON a.user_id=u.id WHERE u.enabled=1 AND a.user_id IS NULL ORDER BY u.id`)
+	nodes, e := gatewayNodes(ctx, tx, r.PathValue("id"))
 	if e != nil {
 		return nil, e
 	}
-	nodes := []hg.Node{}
-	for _, u := range users {
-		nodes = append(nodes, hg.Node{ID: "user-" + strconv.FormatInt(u.number("id"), 10), Name: u.text("name")})
+	if body.Template != "" {
+		if body.Template != "china-direct" || body.Source != "" {
+			return nil, failure(422, "规则模板无效")
+		}
+		if len(nodes) == 0 {
+			return nil, failure(422, "没有启用的 VPS 节点")
+		}
+		body.Source = hg.ChinaDirectPatch
+		body.Scope = "all"
+		body.Subject = ""
+		c.Default = "proxy"
+		if c.DefaultNode == "" {
+			c.DefaultNode = nodes[0].ID
+		}
+		found := false
+		for _, n := range c.Nodes {
+			if n.ID == c.DefaultNode {
+				found = true
+			}
+		}
+		if !found {
+			for _, n := range nodes {
+				if n.ID == c.DefaultNode {
+					c.Nodes = append(c.Nodes, n)
+					found = true
+				}
+			}
+		}
+		if !found {
+			return nil, failure(422, "默认 VPS 节点不可用")
+		}
 	}
 	result, e := hg.PreviewRules(c, body.Source, body.Scope, body.Subject, nodes)
 	if e != nil {
 		return nil, failure(422, e.Error())
 	}
+	result.Source = body.Source
 	return result, nil
 }
 func (app *panel) homeRollback(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -353,6 +418,13 @@ func (app *panel) homeEvents(ctx context.Context, tx *sql.Tx, r *http.Request) (
 		}
 		where += " AND mac=?"
 		args = append(args, m)
+	}
+	if action := r.URL.Query().Get("action"); action != "" {
+		if action != "direct" && action != "proxy" && action != "reject" {
+			return nil, failure(422, "流量路径无效")
+		}
+		where += " AND action=?"
+		args = append(args, action)
 	}
 	n, e := one(ctx, tx, "SELECT COUNT(*) n FROM home_events WHERE "+where, args...)
 	if e != nil {
@@ -477,6 +549,9 @@ func (app *panel) homeSync(_ http.ResponseWriter, r *http.Request) (any, error) 
 	if s.Status == nil {
 		s.Status = map[string]any{}
 	}
+	if e := validateHomeTraffic(s.Traffic); e != nil {
+		return nil, e
+	}
 	status, e := json.Marshal(s.Status)
 	if e != nil || len(status) > 32768 {
 		return nil, failure(422, "网关状态超出限制")
@@ -514,6 +589,9 @@ func (app *panel) homeSync(_ http.ResponseWriter, r *http.Request) (any, error) 
 				return e
 			}
 			if _, e = tx.Exec("UPDATE home_gateways SET last_seen=?,version=?,applied=?,error=?,status=?,capabilities=? WHERE id=?", unixNow(), s.Version, s.Applied, s.Error, string(status), string(caps), g["id"]); e != nil {
+				return e
+			}
+			if e = storeHomeTraffic(r.Context(), tx, g.text("id"), s); e != nil {
 				return e
 			}
 			for _, d := range s.Devices {

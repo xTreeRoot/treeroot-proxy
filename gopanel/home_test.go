@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	hg "treeroot/gopanel/homegateway"
@@ -18,15 +19,24 @@ func homeFixture(t *testing.T) (*panel, func(string, string, any, bool) (int, ma
 	if e != nil {
 		t.Fatal(e)
 	}
-	_, e = db.Exec(`CREATE TABLE users(id INTEGER PRIMARY KEY,name TEXT,client_uuid TEXT,enabled INTEGER);CREATE TABLE user_archives(user_id INTEGER PRIMARY KEY,deleted_at INTEGER);CREATE TABLE sessions(token_hash TEXT PRIMARY KEY,csrf TEXT,expires INTEGER);` + homeSchema)
+	_, e = db.Exec(`CREATE TABLE users(id INTEGER PRIMARY KEY,name TEXT,client_uuid TEXT,email TEXT,token TEXT,created INTEGER,upload INTEGER DEFAULT 0,download INTEGER DEFAULT 0,enabled INTEGER DEFAULT 1);CREATE TABLE audit(id INTEGER PRIMARY KEY,ts INTEGER,action TEXT,user_id INTEGER);CREATE TABLE user_archives(user_id INTEGER PRIMARY KEY,deleted_at INTEGER);CREATE TABLE sessions(token_hash TEXT PRIMARY KEY,csrf TEXT,expires INTEGER);` + homeSchema)
 	if e != nil {
 		t.Fatal(e)
 	}
-	_, e = db.Exec("INSERT INTO users VALUES(1,'test','private-test-node',1);INSERT INTO sessions VALUES(?,?,?)", digest("session"), "csrf", unixNow()+600)
+	_, e = db.Exec("INSERT INTO users(id,name,client_uuid,enabled) VALUES(1,'test','private-test-node',1);INSERT INTO sessions VALUES(?,?,?)", digest("session"), "csrf", unixNow()+600)
 	if e != nil {
 		t.Fatal(e)
 	}
 	app := &panel{database: db, queue: make(chan writeJob, 64), mux: http.NewServeMux(), baseURL: "https://example.test", config: config{WSPath: "/ws"}, reportSlots: make(chan struct{}, 4)}
+	app.config.DataDir = t.TempDir()
+	app.config.XrayConfig = filepath.Join(app.config.DataDir, "xray.json")
+	if e = os.WriteFile(app.config.XrayConfig, []byte(`{"inbounds":[{"tag":"websocket-in","settings":{"clients":[]}}],"outbounds":[]}`), 0600); e != nil {
+		t.Fatal(e)
+	}
+	app.config.Xray, e = os.Executable()
+	if e != nil {
+		t.Fatal(e)
+	}
 	app.routesHome()
 	done := make(chan struct{})
 	go app.runWriter(db, done)
@@ -103,7 +113,7 @@ func TestHomeVersionConflictAndCredentialBoundary(t *testing.T) {
 	_, d := req("POST", "/api/home", map[string]any{"name": "lab"}, true)
 	id := d["id"].(string)
 	path := "/api/home/" + id
-	c := hg.Config{Revision: 1, Default: "proxy", DefaultNode: "user-1", Nodes: []hg.Node{{ID: "user-1", Proxy: map[string]any{"password": "must-not-store"}}}}
+	c := hg.Config{Revision: 1, Default: "proxy", DefaultNode: "user-2", Nodes: []hg.Node{{ID: "user-2", Proxy: map[string]any{"password": "must-not-store"}}}}
 	code, d := req("PUT", path+"/config", c, true)
 	if code != 200 {
 		t.Fatal(code, d)
@@ -122,7 +132,7 @@ func TestHomeVersionConflictAndCredentialBoundary(t *testing.T) {
 	if code != 200 || bytes.Contains(out, []byte("private-test-node")) {
 		t.Fatal(code, d)
 	}
-	_, e := app.database.Exec("UPDATE users SET enabled=0 WHERE id=1")
+	_, e := app.database.Exec("UPDATE users SET enabled=0 WHERE id=2")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -201,7 +211,7 @@ func TestHomeRollbackCreatesNewRevisionAndExpiredTaskNeverRuns(t *testing.T) {
 		t.Fatal(code, d)
 	}
 	restored, e := homeConfig(context.Background(), app.database, id, 3)
-	if e != nil || restored.Default != "direct" {
+	if e != nil || restored.Default != "proxy" {
 		t.Fatal(restored, e)
 	}
 	_, e = app.database.Exec("UPDATE home_gateways SET agent_hash=?,last_seen=? WHERE id=?", digest("abcdefghijklmnopqrstuvwxyz0123456789"), unixNow(), id)
@@ -251,7 +261,7 @@ func TestHomeBackupRestorePublishesHistoricalPolicyAsNewRevision(t *testing.T) {
 		t.Fatal(code, d)
 	}
 	restored, e := homeConfig(context.Background(), app.database, id, 3)
-	if e != nil || restored.Default != "direct" {
+	if e != nil || restored.Default != "proxy" {
 		t.Fatal("backup did not create restored desired revision", restored, e)
 	}
 }
