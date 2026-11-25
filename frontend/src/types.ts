@@ -1,4 +1,5 @@
 export type Page =
+	| "home"
   | "overview"
   | "egress-dashboard"
   | "proxy-dashboard"

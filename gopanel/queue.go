@@ -185,6 +185,9 @@ func migrate(db *sql.DB) error {
 		if err != nil {
 			return err
 		}
+		if _, err = tx.Exec(homeSchema); err != nil {
+			return err
+		}
 		return syncTotals(tx, "")
 	}})
 }

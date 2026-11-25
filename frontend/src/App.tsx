@@ -43,6 +43,7 @@ import { EgressDashboard } from "./pages/EgressDashboard";
 import { EgressPage } from "./pages/Egress";
 import { RecordsPage } from "./pages/Records";
 import { SettingsPage } from "./pages/Settings";
+import { HomePage } from "./pages/Home";
 
 export const navigation = [
   { id: "overview", label: "运行概览", icon: LayoutDashboard },
@@ -51,6 +52,7 @@ export const navigation = [
   { id: "users", label: "用户与订阅", icon: UsersIcon },
   { id: "activity", label: "访问记录", icon: Activity },
   { id: "egress", label: "电脑出口", icon: Monitor },
+  { id: "home", label: "家庭网络", icon: Globe2 },
   { id: "egress-records", label: "出口明细", icon: ListFilter },
   { id: "settings", label: "管理设置", icon: Settings },
 ] as const;
@@ -475,6 +477,9 @@ function Workspace({
           </div>
         </header>
         <main ref={main} id="workspace" tabIndex={-1}>
+          <section hidden={page !== "home"} aria-label="家庭网络">
+            {(page === "home" || visited.includes("home")) && <HomePage active={page === "home"} />}
+          </section>
           <section hidden={page !== "overview"} aria-label="运行概览">
             {(page === "overview" || visited.includes("overview")) && (
               <>

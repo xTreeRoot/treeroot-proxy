@@ -284,6 +284,7 @@ func (app *panel) routes() {
 	app.route("POST /api/password", true, app.password)
 	app.routesUsers()
 	app.routesEgress()
+	app.routesHome()
 	app.route("GET /api/server", true, app.serverInfo)
 	app.route("GET /api/resources", true, app.resourceInfo)
 	for _, path := range []string{"/{$}", "/admin"} {

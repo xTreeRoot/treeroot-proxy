@@ -2091,3 +2091,21 @@ meter::-moz-meter-bar {
     min-width: 0;
   }
 }
+
+.home-page { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; min-width: 0; }
+.home-page > * { min-width: 0; }
+.home-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding-block: 4px; }
+.home-status { display: grid; gap: 24px; padding: 24px; }
+.home-table { padding: 20px; overflow: hidden; }
+.home-table .home-toolbar { margin-bottom: 20px; }
+.home-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.home-rule-source { font-family: var(--font-mono, ui-monospace, monospace); line-height: 1.7; tab-size: 2; }
+.home-modal .ant-modal-footer { margin-top: 24px; }
+.home-modal .ant-modal-close { width: 36px; height: 36px; }
+.home-page .ant-tabs-nav { margin-bottom: 20px; }
+@media(max-width:767px) {
+ .home-status,.home-table { padding: 16px; }
+ .home-toolbar > .ant-select { min-width: 0 !important; flex: 1 1 160px; }
+ .home-status .ant-space { row-gap: 12px !important; }
+ .home-form-grid { grid-template-columns: 1fr; gap: 0; }
+}

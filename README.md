@@ -25,6 +25,7 @@ python3 ops/manage.py go-update    # 构建 React/Go、预验证、备份并发�
 | [更新与备份](docs/DEPLOYMENT.md) | 发布程序、依赖变更、备份和故障恢复 |
 | [BBRx 线路对照记录](docs/NETWORK-20261111.md) | 公司网络测速、固定源码与效果边界 |
 | [换服务器](docs/MIGRATION.md) | 备份、恢复新机、测试、切 DNS、回退 |
+| [家庭网络](docs/HOME-GATEWAY.md) | 实际接线、Go 家庭程序、正式管理通道、高级规则和验收边界 |
 | `deploy/server.json` | 当前 IP、域名、DNS RecordId、固定软件版本 |
 | `private/服务器访问说明.md` | 服务器登录方式与交付时密码；只在本机查看 |
 | `private/管理后台登录信息.txt` | 后台初始登录信息；改密后以实际密码为准 |

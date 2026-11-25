@@ -1,0 +1,15 @@
+#!/bin/sh /etc/rc.common
+START=98
+STOP=10
+USE_PROCD=1
+
+start_service() {
+  [ -s /etc/treeroot-home/agent.json ] || return 1
+  procd_open_instance
+  procd_set_param command /usr/bin/home-gateway -config /etc/treeroot-home/agent.json run
+  procd_set_param respawn 3600 10 0
+  procd_set_param stdout 1
+  procd_set_param stderr 1
+  procd_set_param term_timeout 15
+  procd_close_instance
+}
