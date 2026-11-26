@@ -1,15 +1,15 @@
-import { Input, Select, Space } from "antd";
+import { Input, Space } from "antd";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { write } from "../api";
 import { Button, Feedback, useRemote, useTask, useUI } from "../components";
-import type { Server, User } from "../types";
+import type { Server } from "../types";
 
 type Template = { source: string; revision: string };
 type Validation = { rules: number; fallback: string };
 const endpoint = "/vps/subscription";
 
-export function VpsPage({ active, users }: { active: boolean; users: User[] }) {
+export function VpsPage({ active }: { active: boolean }) {
   const config = useRemote<Template>(["vps-subscription"], endpoint, active);
   const server = useRemote<Server>(["server"], "/server", active);
   const cache = useQueryClient();
@@ -17,10 +17,7 @@ export function VpsPage({ active, users }: { active: boolean; users: User[] }) {
   const ui = useUI();
   const [draft, setDraft] = useState<Template | null>(null);
   const [validation, setValidation] = useState<Validation | null>(null);
-  const [selected, setSelected] = useState<number>();
   const editor = draft ?? config.data;
-  const enabled = users.filter((u) => u.enabled);
-  const account = enabled.find((u) => u.id === selected) ?? enabled[0];
   const fields = [
     ["订阅域名", server.data?.domain],
     ["代理协议", server.data?.protocol],
@@ -72,12 +69,6 @@ export function VpsPage({ active, users }: { active: boolean; users: User[] }) {
         </Space>
         {validation && <span role="status">校验通过 · {validation.rules} 条规则 · {validation.fallback}</span>}
       </article>}
-      <article className="panel vps-download">
-        <label htmlFor="vps-sub-user">用户订阅</label>
-        <Select id="vps-sub-user" value={account?.id} placeholder="暂无启用用户"
-          options={enabled.map((u) => ({ label: u.name, value: u.id }))} onChange={setSelected} />
-        {account && <a href={account.clash_url} download="TreeRoot.yaml">下载已发布 YAML</a>}
-      </article>
     </div>
   );
 }

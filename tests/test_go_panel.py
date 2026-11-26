@@ -238,7 +238,8 @@ with socket.create_server(('127.0.0.1', 0)) as listener:
                 config = json.loads(responses[0][2])
                 self.assertEqual(config['mode'], 'rule')
                 rules = config['rules']
-                self.assertIn('DOMAIN-SUFFIX,douyinpic.com,DIRECT', rules[:-2])
+                for domain in ('douyinpic.com', 'xiaomi.net', 'xiaomixiaoai.com', 'kuaishou.com', 'toutiao.com'):
+                    self.assertIn(f'DOMAIN-SUFFIX,{domain},DIRECT', rules[:-2])
                 self.assertEqual(rules[-2:], ['GEOIP,CN,DIRECT', 'MATCH,美国自建'])
         self.assertEqual(self.request(self.go, '/api/logout', method='POST', body={}, headers=auth)[0], 200)
         self.assertEqual(json.loads(self.request(self.go, '/api/me', headers=auth)[2]), {'authenticated': False})

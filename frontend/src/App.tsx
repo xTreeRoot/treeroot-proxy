@@ -248,7 +248,7 @@ function Workspace({
   const users = useRemote<User[]>(
     ["users"],
     "/users",
-    ["users", "vps", "proxy-dashboard", "activity"].includes(page),
+    ["users", "proxy-dashboard", "activity"].includes(page),
   );
   const visibleUsers = (users.data || []).filter((user) => !user.deleted);
   useEffect(() => {
@@ -525,7 +525,7 @@ function Workspace({
           </section>
           <section hidden={page !== "vps"} aria-label="VPS 管理">
             {(page === "vps" || visited.includes("vps")) && (
-              <VpsPage active={page === "vps"} users={visibleUsers} />
+              <VpsPage active={page === "vps"} />
             )}
           </section>
           <section hidden={page !== "users"} aria-label="vps用户">
