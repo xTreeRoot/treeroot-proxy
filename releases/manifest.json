@@ -1,16 +1,16 @@
 [
   {
+    "version": "v2026.11.26.2",
+    "commit": "ab84ba90f06ff7ad31f85c4205ff1209e3329aa3",
+    "archive": "treeroot-v2026.11.26.2.tar.gz",
+    "sha256": "d8f6c00caaa0c8fd8c32a70fe41547431877d1c6e10ea74ef654a011a08ee335",
+    "created_at": "2026-11-26T07:19:14.888326+00:00"
+  },
+  {
     "version": "v2026.11.26.1",
     "commit": "98f08bf219e31936b68d8e4fa111d3c7c265bc94",
     "archive": "treeroot-v2026.11.26.1.tar.gz",
     "sha256": "c0950f9c1c66ea68433b04709b80802b74bed6f57442c28526052ab764978bea",
     "created_at": "2026-11-26T07:09:07.123504+00:00"
-  },
-  {
-    "version": "v2026.11.25.2",
-    "commit": "5c2a9ce032f33188aae54db81eca36ea08c1ac16",
-    "archive": "treeroot-v2026.11.25.2.tar.gz",
-    "sha256": "e2b1bfa46fd5ede22673d8b621273112df3fd9bcb171ffd95098e0976d9a592e",
-    "created_at": "2026-11-25T13:52:54.433793+00:00"
   }
 ]
