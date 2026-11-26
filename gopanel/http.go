@@ -17,7 +17,6 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -282,6 +281,7 @@ func (app *panel) routes() {
 	app.route("POST /api/login", false, app.login)
 	app.route("POST /api/logout", true, app.logout)
 	app.route("POST /api/password", true, app.password)
+	app.routesSubscription()
 	app.routesUsers()
 	app.routesEgress()
 	app.routesHome()
@@ -336,16 +336,22 @@ func (app *panel) subscription(w http.ResponseWriter, r *http.Request) (any, err
 		_, err = io.WriteString(w, encode("vmess://"+encode(string(data))+"\n"))
 		return nil, err
 	}
-	data, err := os.ReadFile(filepath.Join(app.root, "subscription-template.json"))
+	source, err := app.clashSource(r.Context(), app.database)
 	if err != nil {
 		return nil, err
 	}
-	var template row
-	if err := json.Unmarshal(data, &template); err != nil {
+	common, err := parseClash(source)
+	if err != nil {
 		return nil, err
 	}
-	template["proxies"] = []row{{"name": name, "type": "vmess", "server": host, "port": 443, "uuid": uuid, "alterId": 0, "cipher": "auto", "udp": true, "tls": true, "servername": host, "skip-cert-verify": false, "network": "ws", "ws-opts": row{"path": app.config.WSPath, "headers": row{"Host": host}}}}
-	template["proxy-groups"] = []row{{"name": "美国自建", "type": "select", "proxies": []string{name}}}
+	template := struct {
+		clashTemplate
+		Proxies []row `json:"proxies"`
+		Groups  []row `json:"proxy-groups"`
+	}{clashTemplate: common}
+	template.Proxies = []row{{"name": name, "type": "vmess", "server": host, "port": 443, "uuid": uuid, "alterId": 0, "cipher": "auto", "udp": true, "tls": true, "servername": host, "skip-cert-verify": false, "network": "ws", "ws-opts": row{"path": app.config.WSPath, "headers": row{"Host": host}}}}
+	template.Groups = []row{{"name": proxyGroup, "type": "select", "proxies": []string{name}}}
+	w.Header().Set("Cache-Control", "private, no-store")
 	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
 	w.Header().Set("Content-Disposition", "attachment; filename=TreeRoot.yaml")
 	return nil, json.NewEncoder(w).Encode(template)

@@ -37,6 +37,12 @@ UI 修改还需在 Codex 内浏览器验证桌面和手机布局、控制台、�
 
 旧 Python 主机仍可用 `update`；Go 上线后不要用它更新。回退保留新增表与最新业务数据。
 
+## Clash 订阅模板
+
+管理员在“VPS 管理”编辑公共 YAML，点击“校验规则”后可发布。支持 DOMAIN、DOMAIN-SUFFIX、DOMAIN-KEYWORD、IP-CIDR、IP-CIDR6、GEOIP、SRC-PORT、DST-PORT、NETWORK 和最后一条 MATCH，策略可选 DIRECT、REJECT 或“美国自建”。“下载已发布 YAML”按选中的启用用户生成完整配置，其中包含该用户凭据，按私密文件保存。客户端刷新已有订阅并使用规则模式即可生效。
+
+首次读取仓库的 `subscription-template.json`，后台发布后优先读取 SQLite 既有 `state` 表的 `clash_subscription_yaml`。校验失败、取消和版本冲突均保留线上配置。日常发布与恢复使用最新数据库；如临时退回不支持编辑器的旧程序，旧程序下发当时随程序打包的模板，恢复新版后会继续使用数据库中保存的 YAML。
+
 ## 发布后怎么确认
 
 ```bash

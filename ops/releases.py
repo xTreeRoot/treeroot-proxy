@@ -39,7 +39,14 @@ def source_allowed(name):
     if len(path.parts) == 1:
         return name in TOP_LEVEL
     if path.parts[0] == 'gopanel':
-        return len(path.parts) == 2 and (path.suffix == '.go' or path.name in ('go.mod', 'go.sum'))
+        if len(path.parts) == 2:
+            return path.suffix == '.go' or path.name in ('go.mod', 'go.sum')
+        return path.parent.as_posix() in {
+            'gopanel/homeap', 'gopanel/homegateway', 'gopanel/cmd/home-gateway',
+            'gopanel/cmd/home-host', 'gopanel/cmd/treeroot-ops',
+        } and path.suffix == '.go'
+    if name == 'deploy/home/treeroot-home.init':
+        return True
     if path.parts[0] == 'frontend':
         if any(part in ('node_modules', 'dist', 'coverage', 'private', '.git') or part.startswith('.') for part in path.parts):
             return False

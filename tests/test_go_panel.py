@@ -186,6 +186,39 @@ with socket.create_server(('127.0.0.1', 0)) as listener:
         with closing(sqlite3.connect(self.database)) as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM egress_blacklist WHERE host LIKE 'queued-%'").fetchone()[0], 24)
 
+    def test_publish_clash_template(self):
+        path = '/api/vps/subscription'
+        self.assertEqual(self.request(self.go, path)[0], 401)
+        status, headers, login = self.request(self.go, '/api/login', method='POST',
+                                             body={'username': 'admin', 'password': 'fixture-password'})
+        self.assertEqual(status, 200)
+        cookie = {'Cookie': headers['set-cookie'].split(';', 1)[0]}
+        auth = dict(cookie, **{'X-CSRF-Token': json.loads(login)['csrf']})
+        original = json.loads(self.request(self.go, path, headers=auth)[2])
+        self.assertNotIn('fixture-uuid', original['source'])
+        source = original['source'].replace('DOMAIN,localhost,DIRECT', 'DOMAIN,fixture.test,REJECT')
+        edit = dict(original, source=source)
+        public = '/sub/fixture-token/clash.yaml'
+        before = json.loads(self.request(self.go, public)[2])
+        self.assertEqual(self.request(self.go, path, method='PUT', body=edit, headers=cookie)[0], 403)
+        for bad in [source.replace('MATCH,美国自建', 'MATCH,missing'), source + '\n---\n{}',
+                    source + '\nproxies: []', source.replace('127.0.0.0/8', 'invalid')]:
+            self.assertEqual(self.request(self.go, path, method='PUT', body=dict(edit, source=bad), headers=auth)[0], 422)
+        self.assertEqual(self.request(self.go, path + '/preview', method='POST', body=edit, headers=auth)[0], 200)
+        self.assertEqual(json.loads(self.request(self.go, public)[2]), before)
+        status, _, published = self.request(self.go, path, method='PUT', body=edit, headers=auth)
+        self.assertEqual(status, 200)
+        try:
+            self.assertEqual(self.request(self.go, path, method='PUT', body=original, headers=auth)[0], 409)
+            after = json.loads(self.request(self.go, public)[2])
+            self.assertEqual(after['proxies'], before['proxies'])
+            self.assertIn('DOMAIN,fixture.test,REJECT', after['rules'])
+            self.assertEqual(after, json.loads(self.request(self.go, '/fixture-token/clash.yaml')[2]))
+            self.assertEqual(json.loads(self.request(self.go, path, headers=auth)[2])['source'], source)
+        finally:
+            body = dict(original, revision=json.loads(published)['revision'])
+            self.assertEqual(self.request(self.go, path, method='PUT', body=body, headers=auth)[0], 200)
+
     def test_native_login_and_subscriptions(self):
         status, headers, payload = self.request(self.go, '/api/login', method='POST',
                                                 body={'username': 'admin', 'password': 'fixture-password'})
@@ -201,5 +234,11 @@ with socket.create_server(('127.0.0.1', 0)) as listener:
             responses = [self.request(self.go, path) for path in (f'/sub/fixture-token/{kind}', f'/fixture-token/{kind}')]
             self.assertEqual([response[0] for response in responses], [200, 200])
             self.assertEqual(responses[0][2], responses[1][2])
+            if kind == 'clash.yaml':
+                config = json.loads(responses[0][2])
+                self.assertEqual(config['mode'], 'rule')
+                rules = config['rules']
+                self.assertIn('DOMAIN-SUFFIX,douyinpic.com,DIRECT', rules[:-2])
+                self.assertEqual(rules[-2:], ['GEOIP,CN,DIRECT', 'MATCH,美国自建'])
         self.assertEqual(self.request(self.go, '/api/logout', method='POST', body={}, headers=auth)[0], 200)
         self.assertEqual(json.loads(self.request(self.go, '/api/me', headers=auth)[2]), {'authenticated': False})

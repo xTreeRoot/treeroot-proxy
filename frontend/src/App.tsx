@@ -21,6 +21,7 @@ import {
   Monitor,
   Moon,
   Settings,
+  ServerCog,
   Sun,
   Users as UsersIcon,
 } from "lucide-react";
@@ -43,11 +44,13 @@ import { EgressDashboard } from "./pages/EgressDashboard";
 import { EgressPage } from "./pages/Egress";
 import { RecordsPage } from "./pages/Records";
 import { SettingsPage } from "./pages/Settings";
+import { VpsPage } from "./pages/Vps";
 import { HomePage } from "./pages/Home";
 
 export const navigation = [
   { id: "overview", label: "运行概览", icon: LayoutDashboard },
   { id: "proxy-dashboard", label: "代理流量大盘", icon: BarChart3 },
+  { id: "vps", label: "VPS 管理", icon: ServerCog },
   { id: "users", label: "vps用户", icon: UsersIcon },
   { id: "activity", label: "代理流量记录", icon: Activity },
   { id: "home", label: "家庭网络", icon: Globe2 },
@@ -245,7 +248,7 @@ function Workspace({
   const users = useRemote<User[]>(
     ["users"],
     "/users",
-    ["users", "proxy-dashboard", "activity"].includes(page),
+    ["users", "vps", "proxy-dashboard", "activity"].includes(page),
   );
   const visibleUsers = (users.data || []).filter((user) => !user.deleted);
   useEffect(() => {
@@ -518,6 +521,11 @@ function Workspace({
                   manage={() => navigate("users")}
                 />
               </>
+            )}
+          </section>
+          <section hidden={page !== "vps"} aria-label="VPS 管理">
+            {(page === "vps" || visited.includes("vps")) && (
+              <VpsPage active={page === "vps"} users={visibleUsers} />
             )}
           </section>
           <section hidden={page !== "users"} aria-label="vps用户">

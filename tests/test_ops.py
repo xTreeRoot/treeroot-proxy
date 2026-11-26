@@ -122,7 +122,8 @@ class OperationsTests(unittest.TestCase):
             self.assertFalse(releases.source_allowed(name))
         self.assertTrue(releases.source_allowed('app.py'))
         self.assertTrue(releases.source_allowed('docs/DEPLOYMENT.md'))
-        for name in ('gopanel/main.go', 'gopanel/go.mod', 'gopanel/go.sum'):
+        for name in ('gopanel/main.go', 'gopanel/go.mod', 'gopanel/go.sum', 'gopanel/homegateway/model.go',
+                     'gopanel/cmd/treeroot-ops/main.go', 'deploy/home/treeroot-home.init'):
             self.assertTrue(releases.source_allowed(name))
         for name in ('frontend/package.json', 'frontend/package-lock.json', 'frontend/src/App.tsx',
                      'frontend/src/styles.css', 'frontend/scripts/publish.mjs'):

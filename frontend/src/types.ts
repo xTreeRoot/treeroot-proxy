@@ -3,6 +3,7 @@ export type Page =
   | "overview"
   | "egress-dashboard"
   | "proxy-dashboard"
+  | "vps"
   | "users"
   | "activity"
   | "egress"

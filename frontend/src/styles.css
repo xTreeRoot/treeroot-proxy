@@ -2109,3 +2109,8 @@ meter::-moz-meter-bar {
  .home-status .ant-space { row-gap: 12px !important; }
  .home-form-grid { grid-template-columns: 1fr; gap: 0; }
 }
+
+.vps-editor { display: grid; gap: 16px; padding: 20px; min-width: 0; }
+.vps-download { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 20px; }
+.vps-download .ant-select { min-width: 145px; max-width: 100%; }
+.vps-download a { display: inline-flex; align-items: center; min-height: 44px; }
